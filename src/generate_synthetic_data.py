@@ -1,0 +1,57 @@
+import numpy as np
+
+
+class SyntheticDataGenerater4CoxReg:
+    def __init__(self, n: int, beta_true: np.ndarray, seed: int = 42) -> None:
+        self.n: int = n
+        self.beta_true: np.ndarray = beta_true
+        self.seed: int = seed
+
+    def simulate_cox_data(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Generate synthetic data for Cox regression
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]:
+                covariates: covariates data
+                time: observed time
+                event: identifier of event (1: event occurred, 0: not occurred)
+        """
+        np.random.seed(self.seed)
+        num_param: int = len(self.beta_true)
+        covariates: np.ndarray = np.random.randn(self.n, num_param)
+        linpred: np.ndarray = covariates.dot(self.beta_true)
+        # generate event time and censoring time from exponential distribution
+        event_time: np.ndarray = np.random.exponential(scale=1/np.exp(linpred))
+        censor_time: np.ndarray = np.random.exponential(scale=1.0, size=self.n)
+        # checking for observed time and occur event
+        time: np.ndarray = np.minimum(event_time, censor_time)
+        event: np.ndarray = (event_time <= censor_time).astype(int)
+        return covariates, time, event
+
+    def simulate_cox_data_ties(
+        self, rounding: float = 1.0
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Generate synthetic data for Cox regression including tie data
+
+        Args:
+            rounding (float, optional): Units of rounding for observed time. Defaults to 1.0.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]:
+                covariates: covariates data
+                time: observed time
+                event: identifier of event (1: event occurred, 0: not occurred)
+        """
+        np.random.seed(self.seed)
+        num_param: int = len(self.beta_true)
+        covariates: np.ndarray = np.random.randn(self.n, num_param)
+        linpred: np.ndarray = covariates.dot(self.beta_true)
+        # generate event time and censoring time from exponential distribution
+        event_time: np.ndarray = np.random.exponential(scale=1/np.exp(linpred))
+        censor_time: np.ndarray = np.random.exponential(scale=1.0, size=self.n)
+        # checking for observed time and occur event
+        _time: np.ndarray = np.minimum(event_time, censor_time)
+        # rounding time for occurring multi events in the same time
+        time: np.ndarray = np.round(_time / rounding) * rounding
+        event: np.ndarray = (event_time <= censor_time).astype(int)
+        return covariates, time, event
