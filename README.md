@@ -1,4 +1,4 @@
-# $Poly\'a$-$Gamma$ Gibbs Sampler for Cox Regression
+# $P\'olya$-$Gamma$ Gibbs Sampler for Cox Regression
 Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
 
 ## Abstract
@@ -21,7 +21,7 @@ Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
 ## File Description
 - src/cox_pg_sampler.py
   - `CoxPGSampler`
-    - Poly\'a Gamma Gibbs sampler for Cox Regression Class 
+    - P\'olya Gamma Gibbs sampler for Cox Regression Class 
 - src/generate_synthetic_data.py
   - `SyntheticDataGenerater4CoxReg`
     - generate synthetic data Class
