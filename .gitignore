@@ -136,6 +136,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Environments for vscode
+.vscode
+
 # Spyder project settings
 .spyderproject
 .spyproject
