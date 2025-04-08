@@ -3,6 +3,12 @@ import numpy as np
 
 class SyntheticDataGenerater4CoxReg:
     def __init__(self, n: int, beta_true: np.ndarray, seed: int = 42) -> None:
+        """
+        Args:
+            n (int): size of data
+            beta_true (np.ndarray): true value of parameters
+            seed (int, optional): seed value. Defaults to 42.
+        """
         self.n: int = n
         self.beta_true: np.ndarray = beta_true
         self.seed: int = seed
@@ -29,7 +35,7 @@ class SyntheticDataGenerater4CoxReg:
         return covariates, time, event
 
     def simulate_cox_data_ties(
-        self, rounding: float = 1.0
+        self, rounding: float = 0.001
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Generate synthetic data for Cox regression including tie data
 

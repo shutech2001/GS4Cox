@@ -11,7 +11,7 @@ if __name__ == '__main__':
     beta_true: np.ndarray = np.array([5.0, 3.5])
     n: int = 100
     data_generater = SyntheticDataGenerater4CoxReg(n=n, beta_true=beta_true)
-    covariates, time, event = data_generater.simulate_cox_data()
+    covariates, time, event = data_generater.simulate_cox_data_ties()
 
     # Cox-PG-Sampler
     cpg = CoxPGSampler(covariates=covariates)
