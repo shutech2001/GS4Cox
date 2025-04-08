@@ -17,6 +17,18 @@ Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
 
 ### executing simulation
 - `python src/main.py`
+  - `--data-size` | `--N`
+    - sample size (default: `100`).
+  - `--beta-true` | `--T`
+    - true value of coefficents (default: `'1.0,0.5'`).
+  - `--iteration` | `--I`
+    - the number of total iterations (default: `500`).
+  - `--burn-in` | `--B`
+    - the number of burn-in (default: `400`).
+  - `--use-ties` | `--U`
+    - set to `True` when performing simulation based on the same event occurrence data (default: `False`).
+  - `--rounding` | `--R`
+    - rounding unit for generating tie data (default: `0.001`).
 
 ## File Description
 - src/cox_pg_sampler.py
@@ -25,15 +37,6 @@ Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
 - src/generate_synthetic_data.py
   - `SyntheticDataGenerater4CoxReg`
     - generate synthetic data Class
-
-# TODO
-- simulation
-  - naive cox
-  - naive MH with generalized bayesian
-  - previous study with PG
-  - ours
-- real data (R open data)
-  compare with execution time
 
 ## Citation
 ```

@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Tuple
 
 
 class SyntheticDataGenerater4CoxReg:
@@ -13,7 +14,7 @@ class SyntheticDataGenerater4CoxReg:
         self.beta_true: np.ndarray = beta_true
         self.seed: int = seed
 
-    def simulate_cox_data(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def simulate_cox_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Generate synthetic data for Cox regression
 
         Returns:
@@ -36,7 +37,7 @@ class SyntheticDataGenerater4CoxReg:
 
     def simulate_cox_data_ties(
         self, rounding: float = 0.001
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Generate synthetic data for Cox regression including tie data
 
         Args:

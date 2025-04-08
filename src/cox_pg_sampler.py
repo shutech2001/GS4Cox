@@ -1,6 +1,6 @@
 from collections import deque
 from tqdm import tqdm
-from typing import Optional
+from typing import Optional, Tuple, Dict, Deque
 
 import numpy as np
 from polyagamma import random_polyagamma  # type: ignore
@@ -13,20 +13,21 @@ class CoxPGSampler:
             covariates (np.ndarray)
         """
         self.covariates: np.ndarray = covariates
-        self.data_num: int = covariates.shape[0]
-        self.dim_covariates: int = covariates.shape[1]
+        self.data_num: int
+        self.dim_covariates: int
+        self.data_num, self.dim_covariates = covariates.shape
 
     def build_risk_sets(
         self, time: np.ndarray, event: np.ndarray
-    ) -> tuple[dict[float, np.ndarray], np.ndarray, deque[int]]:
-        """_summary_
+    ) -> Tuple[Dict[float, np.ndarray], np.ndarray, Deque[int]]:
+        """"Construct the atrisk set at each event occurrence time.
 
         Args:
-            time (np.ndarray): _description_
-            event (np.ndarray): _description_
+            time (np.ndarray): observed time
+            event (np.ndarray): event indicator
 
         Returns:
-            tuple[dict[float, np.ndarray], np.ndarray, deque[int]]:
+            Tuple[Dict[float, np.ndarray], np.ndarray, Deque[int]]:
                 - dictionary of event time and index
                     e.g., {1.0: np.array([2, 4, 5, 0, 1, 3])}
                 - time of occurring event
@@ -38,14 +39,56 @@ class CoxPGSampler:
         for t in event_times:
             atrisk_idxs: np.ndarray = np.where(time >= t)[0]
             event_idxs: np.ndarray = np.where((time == t) & (event == 1))[0]
-            event_nums.append(len(event_idxs))
-            if len(event_idxs) > 0:
+            event_nums.append(event_idxs.size)
+            if event_idxs.size > 0:
                 no_event_idxs: np.ndarray = np.setdiff1d(atrisk_idxs, event_idxs, assume_unique=True)
-                new_order: np.ndarray = np.concatenate([event_idxs, np.sort(no_event_idxs)])
+                sorted_risk_sets: np.ndarray = np.concatenate([event_idxs, np.sort(no_event_idxs)])
             else:
-                new_order = np.sort(atrisk_idxs)
-            risk_sets[t] = new_order
+                sorted_risk_sets = np.sort(atrisk_idxs)
+            risk_sets[t] = sorted_risk_sets
         return risk_sets, event_times, event_nums
+
+    def _compute_event_stats(
+        self,
+        event_idx: int,
+        at_risk_idxs: np.ndarray,
+        beta0: np.ndarray,
+        beta: np.ndarray,
+    ) -> Tuple[float, np.ndarray, float]:
+        """Compute the values of eta, tilde x, and offset for an event in the at risk
+
+        Args:
+            event_idx (int): index of a person who caused the event
+            at_risk_idxs (np.ndarray): indexes of atrisk set
+            beta0 (np.ndarray): β before the update
+            beta (np.ndarray): β after the update
+
+        Returns:
+            Tuple[float, np.ndarray, float]:
+                - eta_i
+                - tilde x_i
+                - offset_i
+        """
+        event_cov: np.ndarray = self.covariates[event_idx, :]
+        event_linpred: float = event_cov.dot(beta)
+
+        # atrisk excluding oneself
+        other_idxs: np.ndarray = at_risk_idxs[at_risk_idxs != event_idx]
+        other_cov: np.ndarray = self.covariates[other_idxs, :]
+        # sum of exponential of linear predictors
+        sum_exp_other_linpred: float = np.exp(other_cov.dot(beta)).sum()
+        eta: float = event_linpred - np.log(sum_exp_other_linpred)
+
+        # local linearization with \beta_0
+        exp_other_linpred_center: np.ndarray = np.exp(other_cov.dot(beta0))
+        sum_exp_other_linpred_center: float = exp_other_linpred_center.sum()
+        # calculate \eta \approx \tilde_x - offset
+        weighted_avg_other_cov: np.ndarray = (
+            exp_other_linpred_center[:, np.newaxis] * other_cov
+        ).sum(axis=0) / sum_exp_other_linpred_center
+        tilde_x: np.ndarray = event_cov - weighted_avg_other_cov
+        offset: float = np.log(sum_exp_other_linpred_center) - weighted_avg_other_cov.dot(beta0)
+        return eta, tilde_x, offset
 
     def compute_event_contribution(
         self,
@@ -53,9 +96,9 @@ class CoxPGSampler:
         beta: np.ndarray,
         risk_sets: dict[float, np.ndarray],
         event_times: np.ndarray,
-        event_nums: deque[int]
-    ) -> tuple[deque[float], deque[np.ndarray], deque[float]]:
-        """compute elements for post distribution
+        event_nums: Deque[int]
+    ) -> Tuple[Deque[float], Deque[np.ndarray], Deque[float]]:
+        """Compute elements for post distribution
 
         Args:
             beta0 (np.ndarray): beta of previous iteration
@@ -74,39 +117,17 @@ class CoxPGSampler:
         tilde_x_list: deque[np.ndarray] = deque()
         offset_list: deque[float] = deque()
         for event_num, event_time in zip(event_nums, event_times):
-            indices: np.ndarray = risk_sets[event_time]
-            if len(indices) < 2:
+            at_risk_idxs: np.ndarray = risk_sets[event_time]
+            if at_risk_idxs.size < 2:
                 # if only one person at risk, no contribution to the likelihood
                 continue
-
             # calculate \sum_{j\i\in d(t)} \exp(x_i^\top \beta)
-            event_idxs: np.ndarray = indices[:event_num]
-
-            for event_accumulated_num, event_idx in enumerate(event_idxs):
-                one_event_cov: np.ndarray = self.covariates[event_idx, :]
-                one_event_linpred: float = one_event_cov.dot(beta)
-                at_risks_exclude_one_event_idx: np.ndarray = indices[indices != event_idx]
-                at_risks_exclude_one_event_cov = self.covariates[at_risks_exclude_one_event_idx, :]
-                at_risks_exclude_one_event_linpred: np.ndarray = at_risks_exclude_one_event_cov.dot(beta)
-                exp_at_risks_exclude_one_event_linpred: np.ndarray = np.exp(at_risks_exclude_one_event_linpred)
-                sum_exp_at_risks_exclude_one_event_linpred: float = sum(exp_at_risks_exclude_one_event_linpred)
-
-                at_risks_exclude_one_event_linpred_center: np.ndarray = at_risks_exclude_one_event_cov.dot(beta0)
-                exp_at_risks_exclude_one_event_linpred_center: np.ndarray = np.exp(at_risks_exclude_one_event_linpred_center)  # noqa: E501
-                sum_exp_at_risks_exclude_one_event_linpred_center: float = sum(exp_at_risks_exclude_one_event_linpred_center)  # noqa: E501
-
-                eta_list.append(one_event_linpred - np.log(sum_exp_at_risks_exclude_one_event_linpred))
-
-                numerator: np.ndarray = sum(
-                    e * at_risks_exclude_one_event_cov[i, :] for i, e in enumerate(exp_at_risks_exclude_one_event_linpred_center)  # noqa: E501
-                )
-                tilde_x_list.append(
-                    self.covariates[event_idx, :] - (numerator/sum_exp_at_risks_exclude_one_event_linpred_center)  # noqa: E501
-                )
-
-                offset_list.append(
-                    np.log(sum_exp_at_risks_exclude_one_event_linpred_center) - (numerator/sum_exp_at_risks_exclude_one_event_linpred_center).dot(beta0)  # noqa: E501
-                )
+            event_idxs: np.ndarray = at_risk_idxs[:event_num]
+            for event_idx in event_idxs:
+                eta, tilde_x, offset = self._compute_event_stats(event_idx, at_risk_idxs, beta0, beta)
+                eta_list.append(eta)
+                tilde_x_list.append(tilde_x)
+                offset_list.append(offset)
 
         return eta_list, tilde_x_list, offset_list
 
@@ -121,7 +142,7 @@ class CoxPGSampler:
         prior_mean: Optional[np.ndarray] = None,
         prior_cov: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """sampling by Cox Polya Gamma Gibbs sampler
+        """Sampling by Cox P'olya Gamma Gibbs sampler
 
         Args:
             time (np.ndarray): time of occurring event
@@ -134,45 +155,43 @@ class CoxPGSampler:
             prior_cov (Optional[np.ndarray], optional): covariance of prior distribution. Defaults to None.
 
         Returns:
-            np.ndarray: _description_
+            np.ndarray:
+                - β samples excluding the initial burn-in iterations
         """
-        if prior_mean is None:
-            prior_mean = np.zeros(self.dim_covariates)
-        if prior_cov is None:
-            prior_cov = np.eye(self.dim_covariates) * 100
-        if beta_init is None:
-            beta0: np.ndarray = np.zeros(self.dim_covariates)
-            beta: np.ndarray = np.random.multivariate_normal(prior_mean, prior_cov)
-        else:
-            beta0 = beta_init.copy()
-            beta = np.random.multivariate_normal(prior_mean, prior_cov)
+        mean0: np.ndarray = prior_mean if prior_mean is not None else np.zeros(self.dim_covariates)
+        cov0: np.ndarray = prior_cov if prior_cov is not None else np.eye(self.dim_covariates) * 100
+        beta0: np.ndarray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
+        beta: np.ndarray = np.random.multivariate_normal(mean0, cov0)
 
         beta_samples: deque[np.ndarray] = deque()
         risk_sets, event_times, event_nums = self.build_risk_sets(time, event)
 
-        for it in tqdm(range(n_iter)):
+        for _ in tqdm(range(n_iter)):
             eta_list, tilde_x_list, offset_list = self.compute_event_contribution(
                 beta0, beta, risk_sets, event_times, event_nums
             )
-            # sampling from Poly\'a gamma distribution
+            # sampling from P\'olya gamma distribution
             omega_array: np.ndarray = np.array([random_polyagamma(1, eta) for eta in eta_list])
-            # correct \kappa associated with the local linearization
-            kappa_array: np.ndarray = 0.5 + omega_array*np.array(offset_list)
+            # correct kappa associated with the local linearization
+            kappa_array: np.ndarray = 0.5 + omega_array * np.array(offset_list)
 
-            # calculate additional term of post distribution
-            add_cov: np.ndarray = sum(omega * np.outer(x, x) for x, omega in zip(tilde_x_list, omega_array))
-            add_mean: np.ndarray = sum(
-                tilde_x * (offset * omega + kappa)
-                for tilde_x, offset, omega, kappa in zip(tilde_x_list, offset_list, omega_array, kappa_array)
+            # calculate additional term of posterior distribution
+            add_cov: np.ndarray = np.sum(
+                [omega * np.outer(x, x) for x, omega in zip(tilde_x_list, omega_array)], axis=0
+            )
+            add_mean: np.ndarray = np.sum(
+                [tilde_x * (offset * omega + kappa) for tilde_x, offset, omega, kappa in zip(
+                    tilde_x_list, offset_list, omega_array, kappa_array
+                )],
+                axis=0
             )
             # calculate parameters of post distribution
-            post_cov: np.ndarray = np.linalg.inv(np.linalg.inv(prior_cov) + lr*add_cov)
-            post_mean: np.ndarray = post_cov.dot(np.linalg.inv(prior_cov).dot(prior_mean) + lr*add_mean)
+            post_cov: np.ndarray = np.linalg.inv(np.linalg.inv(cov0) + lr * add_cov)
+            post_mean: np.ndarray = post_cov.dot(np.linalg.inv(cov0).dot(mean0) + lr * add_mean)
 
             # store previous beta for next iteration's local linearization
             beta0 = beta.copy()
             beta = np.random.multivariate_normal(post_mean, post_cov)
             beta_samples.append(beta)
 
-        _beta_samples: np.ndarray = np.array(beta_samples)
-        return _beta_samples[burn_in:]
+        return np.array(beta_samples)[burn_in:]
