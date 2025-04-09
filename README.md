@@ -1,4 +1,4 @@
-# $P\'olya$-$Gamma$ Gibbs Sampler for Cox Regression
+# P\'olya-Gamma Gibbs Sampler for Cox Regression
 Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
 
 ## Abstract
