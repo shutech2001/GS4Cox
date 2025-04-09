@@ -1,12 +1,11 @@
 from collections import deque
-from tqdm import tqdm
 from typing import Optional, Tuple, Dict, Deque
 
 import numpy as np
 from polyagamma import random_polyagamma  # type: ignore
 
 
-class CoxPGSampler:
+class CoxSampler:
     def __init__(self, covariates: np.ndarray):
         """
         Args:
@@ -47,6 +46,13 @@ class CoxPGSampler:
                 sorted_risk_sets = np.sort(atrisk_idxs)
             risk_sets[t] = sorted_risk_sets
         return risk_sets, event_times, event_nums
+
+
+class CoxPGSampler(CoxSampler):
+    """Cox-P\'olya-Gamma Gibbs sampler
+    """
+    def __init__(self, covariates: np.ndarray) -> None:
+        super().__init__(covariates)
 
     def _compute_event_stats(
         self,
@@ -166,7 +172,7 @@ class CoxPGSampler:
         beta_samples: deque[np.ndarray] = deque()
         risk_sets, event_times, event_nums = self.build_risk_sets(time, event)
 
-        for _ in tqdm(range(n_iter)):
+        for _ in range(n_iter):
             eta_list, tilde_x_list, offset_list = self.compute_event_contribution(
                 beta0, beta, risk_sets, event_times, event_nums
             )
@@ -190,8 +196,126 @@ class CoxPGSampler:
             post_mean: np.ndarray = post_cov.dot(np.linalg.inv(cov0).dot(mean0) + lr * add_mean)
 
             # store previous beta for next iteration's local linearization
-            beta0 = beta.copy()
-            beta = np.random.multivariate_normal(post_mean, post_cov)
-            beta_samples.append(beta)
+            _beta0 = beta.copy()
+            try:
+                beta = np.random.multivariate_normal(post_mean, post_cov)
+                beta_samples.append(beta)
+            except np.linalg.LinAlgError as e:
+                print(str(e))
+                beta_samples.append(_beta0)
+            finally:
+                beta0 = _beta0
 
         return np.array(beta_samples)[burn_in:]
+
+
+class CoxMHSampler(CoxSampler):
+    def __init__(self, covariates: np.ndarray) -> None:
+        super().__init__(covariates)
+
+    def log_partial_likelihood(
+        self,
+        beta: np.ndarray,
+        time: np.ndarray,
+        event: np.ndarray,
+    ) -> float:
+        """Compute log partial likelihood
+
+        Args:
+            beta (np.ndarray): parameters
+            time (np.ndarray): time of occurring event
+            event (np.ndarray): event flg (1: occurred)
+
+        Returns:
+            float: value of log partial likelihood
+        """
+        log_pl: float = 0.0
+        # unique value of event times
+        event_times: np.ndarray = np.unique(time[event == 1])
+        for t in event_times:
+            # who happen event
+            event_idxs: np.ndarray = np.where((time == t) & (event == 1))[0]
+            sum_event_linpred: float = np.sum(self.covariates[event_idxs, :].dot(beta))
+            # set of at risk
+            at_risk_idx: np.ndarray = np.where(time >= t)[0]
+            sum_exp_at_risk_linpred: float = np.sum(np.exp(self.covariates[at_risk_idx, :].dot(beta)))
+
+            log_pl += sum_event_linpred - len(event_idxs) * np.log(sum_exp_at_risk_linpred)
+        return log_pl
+
+    def log_pl_posterior(
+        self,
+        beta: np.ndarray,
+        time: np.ndarray,
+        event: np.ndarray,
+        lr: float = 1.0,
+        cov0: float = 10.0
+    ) -> float:
+        """Compute log posterior likelihood in generalized bayesian inference
+
+        Args:
+            beta (np.ndarray): parameters
+            time (np.ndarray): time of occurring event
+            event (np.ndarray): event flg (1: occurred)
+            lr (float, optional): learning rate. Defaults to 1.0.
+            cov0 (float, optional): scale parameter for prior distribution. Defaults to 10.0.
+
+        Returns:
+            float: log posterior likelihood
+        """
+        # log prior likelihood
+        log_pl_prior: float = -0.5 * np.sum(beta**2) / (cov0**2)
+        # log partial likelihood
+        log_pl_post: float = self.log_partial_likelihood(beta, time, event)
+        return log_pl_prior + lr * log_pl_post
+
+    def cox_mh_sample(
+        self,
+        time: np.ndarray,
+        event: np.ndarray,
+        n_iter: int = 1000,
+        burn_in: int = 500,
+        lr: float = 1.0,
+        beta_init: Optional[np.ndarray] = None,
+        prior_cov_value: Optional[float] = None,
+        proposal_scale: float = 10,
+    ) -> Tuple[np.ndarray, float]:
+        """Sampling by Metropolis-Hastings algorithm
+
+        Args:
+            time (np.ndarray): time of occurring event
+            event (np.ndarray): event flg (1: occurred)
+            n_iter (int, optional): iteration of sampling. Defaults to 1000.
+            burn_in (int, optional): burn in of sampling. Defaults to 500.
+            lr (float, optional): learning rate for generalized Bayesian framework. Defaults to 1.0.
+            beta_init (Optional[np.ndarray], optional): initial beta. Defaults to None.
+            prior_cov_value (Optional[float], optional): covariance of prior distribution. Defaults to None.
+            proposal_scale (Optional[float], optional): covariance of proposal distribution. Defaults to 10.
+
+        Returns:
+            Tuple[np.ndarray, float]:
+                - β samples excluding the initial burn-in iterations
+                - acceptance rate
+        """
+        beta_samples: Deque[np.ndarray] = deque()
+        cov0: float = prior_cov_value if prior_cov_value is not None else 100
+        beta: np.ndarray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
+
+        log_pl_post: float = self.log_pl_posterior(beta, time, event, lr, cov0)
+        accept_count: int = 0
+
+        for _ in range(n_iter):
+            # proposal distribution: multi variable normal distribution
+            beta_proposal: np.ndarray = beta + np.random.normal(0, proposal_scale, size=self.dim_covariates)
+            log_pl_post_proposal: float = self.log_pl_posterior(beta_proposal, time, event, lr, cov0)
+            # accept probability for log
+            log_alpha: float = log_pl_post_proposal - log_pl_post
+            # compare with log(Uniform(0,1))
+            if np.log(np.random.uniform(0, 1)) < log_alpha:
+                beta = beta_proposal
+                log_pl_post = log_pl_post_proposal
+                accept_count += 1
+            beta_samples.append(beta)
+
+        accept_rate: float = accept_count / n_iter
+        return np.array(beta_samples)[burn_in:], accept_rate

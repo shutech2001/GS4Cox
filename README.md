@@ -38,6 +38,7 @@ Polya-Gamma Gibbs Sampler for Cox Regression Models in General Bayes Framework
   - `SyntheticDataGenerater4CoxReg`
     - generate synthetic data Class
 
+
 ## Citation
 ```
 ```

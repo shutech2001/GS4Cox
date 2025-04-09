@@ -1,10 +1,11 @@
 import argparse
+import time as t
 import numpy as np
 import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_pg_sampler import CoxPGSampler
+from cox_pg_sampler import CoxPGSampler, CoxMHSampler
 from generate_synthetic_data import SyntheticDataGenerater4CoxReg
 
 
@@ -25,8 +26,19 @@ def run_simulation(
 
     # Estimate by Cox-PG Gibbs sampler
     cpg = CoxPGSampler(covariates=covariates)
+    start = t.time()
     cpg_samples: np.ndarray = cpg.cox_pg_sample(time, event, n_iter=n_iter, burn_in=burn_in)
+    end = t.time()
+    print(f'{end - start}')
     print(f'Estimated coefficients by Cox-PG: {cpg_samples.mean(axis=0)}')
+    # Estimate by Cox MH sampler
+    cmh = CoxMHSampler(covariates=covariates)
+    start = t.time()
+    cmh_samples, acceptance_rate = cmh.cox_mh_sample(time, event, n_iter=n_iter, burn_in=burn_in)
+    end = t.time()
+    print(f'{end - start}')
+    print(f'Estimated coefficients by Cox-MH: {cmh_samples.mean(axis=0)}')
+    print(f'acceptance rate: {acceptance_rate:.2f}')
 
     # Estimate by naive Cox Regression
     df = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(len(beta_true))])
