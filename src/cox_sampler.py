@@ -48,11 +48,15 @@ class CoxSampler:
         return risk_sets, event_times, event_nums
 
 
-class CoxPGSampler(CoxSampler):
-    """Cox-P\'olya-Gamma Gibbs sampler
+class GBCoxPGSampler(CoxSampler):
+    """Cox-P\'olya-Gamma Gibbs sampler in Generalized Bayesian framework
     """
     def __init__(self, covariates: np.ndarray) -> None:
         super().__init__(covariates)
+
+    def _log_sum_exp(self, a: np.ndarray) -> float:
+        a_max = np.max(a)
+        return a_max + np.log(np.sum(np.exp(a-a_max)) + 1e-10)
 
     def _compute_event_stats(
         self,
@@ -81,11 +85,16 @@ class CoxPGSampler(CoxSampler):
         # atrisk excluding oneself
         other_idxs: np.ndarray = at_risk_idxs[at_risk_idxs != event_idx]
         other_cov: np.ndarray = self.covariates[other_idxs, :]
+        other_linpred: np.ndarray = other_cov.dot(beta)
         # sum of exponential of linear predictors
-        sum_exp_other_linpred: float = np.exp(other_cov.dot(beta)).sum()
-        eta: float = event_linpred - np.log(sum_exp_other_linpred)
+        log_sum_exp_other: float = self._log_sum_exp(other_linpred)
+        # sum_exp_other_linpred: float = np.exp(other_cov.dot(beta)).sum()
+        eta: float = event_linpred - log_sum_exp_other
 
         # local linearization with \beta_0
+        other_linpred_center: np.ndarray = other_cov.dot(beta0)
+        log_sum_exp_other_linpred_center: float = self._log_sum_exp(other_linpred_center)
+
         exp_other_linpred_center: np.ndarray = np.exp(other_cov.dot(beta0))
         sum_exp_other_linpred_center: float = exp_other_linpred_center.sum()
         # calculate \eta \approx \tilde_x - offset
@@ -93,7 +102,7 @@ class CoxPGSampler(CoxSampler):
             exp_other_linpred_center[:, np.newaxis] * other_cov
         ).sum(axis=0) / sum_exp_other_linpred_center
         tilde_x: np.ndarray = event_cov - weighted_avg_other_cov
-        offset: float = np.log(sum_exp_other_linpred_center) - weighted_avg_other_cov.dot(beta0)
+        offset: float = log_sum_exp_other_linpred_center - weighted_avg_other_cov.dot(beta0)
         return eta, tilde_x, offset
 
     def compute_event_contribution(
@@ -137,7 +146,7 @@ class CoxPGSampler(CoxSampler):
 
         return eta_list, tilde_x_list, offset_list
 
-    def cox_pg_sample(
+    def gb_cox_pg_sample(
         self,
         time: np.ndarray,
         event: np.ndarray,
@@ -196,17 +205,11 @@ class CoxPGSampler(CoxSampler):
             post_mean: np.ndarray = post_cov.dot(np.linalg.inv(cov0).dot(mean0) + lr * add_mean)
 
             # store previous beta for next iteration's local linearization
-            _beta0 = beta.copy()
-            try:
-                beta = np.random.multivariate_normal(post_mean, post_cov)
-                beta_samples.append(beta)
-            except np.linalg.LinAlgError as e:
-                print(str(e))
-                beta_samples.append(_beta0)
-            finally:
-                beta0 = _beta0
+            beta0 = beta.copy()
+            beta = np.random.multivariate_normal(post_mean, post_cov)
+            beta_samples.append(beta)
 
-        return np.array(beta_samples)[burn_in:]
+        return np.array(beta_samples)
 
 
 class CoxMHSampler(CoxSampler):
@@ -278,7 +281,7 @@ class CoxMHSampler(CoxSampler):
         lr: float = 1.0,
         beta_init: Optional[np.ndarray] = None,
         prior_cov_value: Optional[float] = None,
-        proposal_scale: float = 10,
+        proposal_scale: float = 0.1,
     ) -> Tuple[np.ndarray, float]:
         """Sampling by Metropolis-Hastings algorithm
 
@@ -318,4 +321,4 @@ class CoxMHSampler(CoxSampler):
             beta_samples.append(beta)
 
         accept_rate: float = accept_count / n_iter
-        return np.array(beta_samples)[burn_in:], accept_rate
+        return np.array(beta_samples), accept_rate

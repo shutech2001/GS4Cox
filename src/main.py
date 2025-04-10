@@ -5,8 +5,9 @@ import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_pg_sampler import CoxPGSampler, CoxMHSampler
-from generate_synthetic_data import SyntheticDataGenerater4CoxReg
+from cox_sampler import GBCoxPGSampler, CoxMHSampler
+from data import SyntheticDataGenerater4CoxReg, import_r_data
+from eval import compute_esr, compute_ess
 
 
 def run_simulation(
@@ -25,20 +26,29 @@ def run_simulation(
         covariates, time, event = data_generater.simulate_cox_data()
 
     # Estimate by Cox-PG Gibbs sampler
-    cpg = CoxPGSampler(covariates=covariates)
+    cpg = GBCoxPGSampler(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.cox_pg_sample(time, event, n_iter=n_iter, burn_in=burn_in)
+    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter, burn_in=burn_in)
     end = t.time()
     print(f'{end - start}')
-    print(f'Estimated coefficients by Cox-PG: {cpg_samples.mean(axis=0)}')
+    cpg_burn_in: np.ndarray = cpg_samples[burn_in:]
+    print(f'Estimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
+    print(f'compute ess: {compute_ess(cpg_samples)}')
+    print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start)}')
+    # print(f'compute dist: {compute_dist(cpg_samples)}')
+
     # Estimate by Cox MH sampler
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
     cmh_samples, acceptance_rate = cmh.cox_mh_sample(time, event, n_iter=n_iter, burn_in=burn_in)
     end = t.time()
     print(f'{end - start}')
-    print(f'Estimated coefficients by Cox-MH: {cmh_samples.mean(axis=0)}')
+    cmh_burn_in: np.ndarray = cmh_samples[burn_in:]
+    print(f'Estimated coefficients by Cox-MH: {cmh_burn_in.mean(axis=0)}')
     print(f'acceptance rate: {acceptance_rate:.2f}')
+    print(f'compute ess: {compute_ess(cmh_burn_in)}')
+    print(f'compute esr: {compute_esr(cmh_burn_in, runtime=end-start)}')
+    # print(f'compute dist: {compute_dist(cmh_samples)}')
 
     # Estimate by naive Cox Regression
     df = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(len(beta_true))])
@@ -115,3 +125,5 @@ if __name__ == '__main__':
         use_ties=args.use_ties,
         rounding=args.rounding,
     )
+
+    df = import_r_data(dataset_name='lung', package_name='survival')
