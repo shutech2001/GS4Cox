@@ -16,6 +16,7 @@ np.set_printoptions(precision=2, suppress=True)
 def run_simulation(
     n: int,
     beta_true: np.ndarray,
+    learning_rate: float,
     n_iter: int,
     burn_in: int,
     proposal_scale: float,
@@ -32,7 +33,7 @@ def run_simulation(
     # Estimate by Cox-PG Gibbs sampler
     cpg = GBCoxPGSampler(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter)
+    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
     print(f'{end - start}')
     cpg_burn_in: np.ndarray = cpg_samples[burn_in:]
@@ -44,7 +45,9 @@ def run_simulation(
     # Estimate by Cox MH sampler
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
-    cmh_samples, acceptance_rate = cmh.cox_mh_sample(time, event, n_iter=n_iter, proposal_scale=proposal_scale)
+    cmh_samples, acceptance_rate = cmh.cox_mh_sample(
+        time, event, n_iter=n_iter, lr=learning_rate, proposal_scale=proposal_scale
+    )
     end = t.time()
     print(f'{end - start}')
     cmh_burn_in: np.ndarray = cmh_samples[burn_in:]
@@ -55,7 +58,7 @@ def run_simulation(
     # print(f'compute dist: {compute_dist(cmh_samples)}')
 
     start = t.time()
-    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter)
+    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
     print(f'{end - start}')
     cmh_h_burn_in: np.ndarray = cmh_h_samples[burn_in:]
@@ -104,7 +107,13 @@ if __name__ == '__main__':
         '--beta-true', '--T',
         type=parse_beta,
         default='3.0,1.5',
-        help="true value of coefficents (default: '3.0,1.5')."
+        help="true value of coefficents (default: 3.0,1.5)."
+    )
+    parser.add_argument(
+        '--learning-rate', '--L',
+        type=float,
+        default='1.0',
+        help="learning rate for general Bayesian framework (default: 1.0)."
     )
     parser.add_argument(
         '--iteration', '--I',
@@ -141,6 +150,7 @@ if __name__ == '__main__':
     run_simulation(
         n=args.data_size,
         beta_true=args.beta_true,
+        learning_rate=args.learning_rate,
         n_iter=args.iteration,
         burn_in=args.burn_in,
         proposal_scale=args.proposal_scale,
