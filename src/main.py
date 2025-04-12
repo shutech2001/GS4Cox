@@ -9,12 +9,16 @@ from cox_sampler import GBCoxPGSampler, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
 from eval import compute_esr, compute_ess
 
+# global setting for output
+np.set_printoptions(precision=2, suppress=True)
+
 
 def run_simulation(
     n: int,
     beta_true: np.ndarray,
     n_iter: int,
     burn_in: int,
+    proposal_scale: float,
     use_ties: bool,
     rounding: float,
 ) -> None:
@@ -28,26 +32,37 @@ def run_simulation(
     # Estimate by Cox-PG Gibbs sampler
     cpg = GBCoxPGSampler(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter, burn_in=burn_in)
+    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter)
     end = t.time()
     print(f'{end - start}')
     cpg_burn_in: np.ndarray = cpg_samples[burn_in:]
     print(f'Estimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
-    print(f'compute ess: {compute_ess(cpg_samples)}')
-    print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start)}')
+    print(f'compute ess: {compute_ess(cpg_samples).mean(axis=0):.2f}')
+    print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start).mean(axis=0):.2f}')
     # print(f'compute dist: {compute_dist(cpg_samples)}')
 
     # Estimate by Cox MH sampler
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
-    cmh_samples, acceptance_rate = cmh.cox_mh_sample(time, event, n_iter=n_iter, burn_in=burn_in)
+    cmh_samples, acceptance_rate = cmh.cox_mh_sample(time, event, n_iter=n_iter, proposal_scale=proposal_scale)
     end = t.time()
     print(f'{end - start}')
     cmh_burn_in: np.ndarray = cmh_samples[burn_in:]
     print(f'Estimated coefficients by Cox-MH: {cmh_burn_in.mean(axis=0)}')
     print(f'acceptance rate: {acceptance_rate:.2f}')
-    print(f'compute ess: {compute_ess(cmh_burn_in)}')
-    print(f'compute esr: {compute_esr(cmh_burn_in, runtime=end-start)}')
+    print(f'compute ess: {compute_ess(cmh_burn_in).mean(axis=0):.2f}')
+    print(f'compute esr: {compute_esr(cmh_burn_in, runtime=end-start).mean(axis=0):.2f}')
+    # print(f'compute dist: {compute_dist(cmh_samples)}')
+
+    start = t.time()
+    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter)
+    end = t.time()
+    print(f'{end - start}')
+    cmh_h_burn_in: np.ndarray = cmh_h_samples[burn_in:]
+    print(f'Estimated coefficients by Cox-MH optimal: {cmh_h_burn_in.mean(axis=0)}')
+    print(f'acceptance rate: {acceptance_rate:.2f}')
+    print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
+    print(f'compute esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
     # print(f'compute dist: {compute_dist(cmh_samples)}')
 
     # Estimate by naive Cox Regression
@@ -56,7 +71,7 @@ def run_simulation(
     df['event'] = event
     cph = CoxPHFitter()
     cph.fit(df, duration_col='time', event_col='event')
-    print("Estimated coefficients by normal cox:", cph.params_)
+    print("Estimated coefficients by normal cox:", np.array(cph.params_))
 
 
 def parse_beta(beta_str: str) -> np.ndarray:
@@ -115,6 +130,12 @@ if __name__ == '__main__':
         default=0.001,
         help='rounding unit for generating tie data (default: 0.001).'
     )
+    parser.add_argument(
+        '--proposal-scale', '--P',
+        type=float,
+        default=10,
+        help='covariance scale for proposal distribution (default: 10).'
+    )
     args = parser.parse_args()
 
     run_simulation(
@@ -122,6 +143,7 @@ if __name__ == '__main__':
         beta_true=args.beta_true,
         n_iter=args.iteration,
         burn_in=args.burn_in,
+        proposal_scale=args.proposal_scale,
         use_ties=args.use_ties,
         rounding=args.rounding,
     )

@@ -2,6 +2,8 @@ from collections import deque
 from typing import Optional, Tuple, Dict, Deque
 
 import numpy as np
+from scipy.linalg import cho_factor, cho_solve  # type: ignore
+from scipy.special import logsumexp  # type: ignore
 from polyagamma import random_polyagamma  # type: ignore
 
 
@@ -54,10 +56,6 @@ class GBCoxPGSampler(CoxSampler):
     def __init__(self, covariates: np.ndarray) -> None:
         super().__init__(covariates)
 
-    def _log_sum_exp(self, a: np.ndarray) -> float:
-        a_max = np.max(a)
-        return a_max + np.log(np.sum(np.exp(a-a_max)) + 1e-10)
-
     def _compute_event_stats(
         self,
         event_idx: int,
@@ -87,13 +85,13 @@ class GBCoxPGSampler(CoxSampler):
         other_cov: np.ndarray = self.covariates[other_idxs, :]
         other_linpred: np.ndarray = other_cov.dot(beta)
         # sum of exponential of linear predictors
-        log_sum_exp_other: float = self._log_sum_exp(other_linpred)
+        log_sum_exp_other: float = logsumexp(other_linpred)
         # sum_exp_other_linpred: float = np.exp(other_cov.dot(beta)).sum()
         eta: float = event_linpred - log_sum_exp_other
 
         # local linearization with \beta_0
         other_linpred_center: np.ndarray = other_cov.dot(beta0)
-        log_sum_exp_other_linpred_center: float = self._log_sum_exp(other_linpred_center)
+        log_sum_exp_other_linpred_center: float = logsumexp(other_linpred_center)
 
         exp_other_linpred_center: np.ndarray = np.exp(other_cov.dot(beta0))
         sum_exp_other_linpred_center: float = exp_other_linpred_center.sum()
@@ -151,7 +149,6 @@ class GBCoxPGSampler(CoxSampler):
         time: np.ndarray,
         event: np.ndarray,
         n_iter: int = 1000,
-        burn_in: int = 500,
         lr: float = 1.0,
         beta_init: Optional[np.ndarray] = None,
         prior_mean: Optional[np.ndarray] = None,
@@ -163,7 +160,6 @@ class GBCoxPGSampler(CoxSampler):
             time (np.ndarray): time of occurring event
             event (np.ndarray): event flg (1: occurred)
             n_iter (int, optional): iteration of sampling. Defaults to 1000.
-            burn_in (int, optional): burn in of sampling. Defaults to 500.
             lr (float, optional): learning rate for generalized Bayesian framework. Defaults to 1.0.
             beta_init (Optional[np.ndarray], optional): initial beta. Defaults to None.
             prior_mean (Optional[np.ndarray], optional): mean of prior distribution. Defaults to None.
@@ -176,7 +172,7 @@ class GBCoxPGSampler(CoxSampler):
         mean0: np.ndarray = prior_mean if prior_mean is not None else np.zeros(self.dim_covariates)
         cov0: np.ndarray = prior_cov if prior_cov is not None else np.eye(self.dim_covariates) * 100
         beta0: np.ndarray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
-        beta: np.ndarray = np.random.multivariate_normal(mean0, cov0)
+        beta: np.ndarray = np.zeros(self.dim_covariates)
 
         beta_samples: deque[np.ndarray] = deque()
         risk_sets, event_times, event_nums = self.build_risk_sets(time, event)
@@ -201,8 +197,11 @@ class GBCoxPGSampler(CoxSampler):
                 axis=0
             )
             # calculate parameters of post distribution
-            post_cov: np.ndarray = np.linalg.inv(np.linalg.inv(cov0) + lr * add_cov)
-            post_mean: np.ndarray = post_cov.dot(np.linalg.inv(cov0).dot(mean0) + lr * add_mean)
+            post_cov_inv: np.ndarray = np.linalg.inv(cov0) + lr * add_cov
+            post_cov: np.ndarray = np.linalg.inv(post_cov_inv)
+            c, lower = cho_factor(post_cov_inv, check_finite=False)
+            rhs: np.ndarray = np.linalg.solve(cov0, mean0) + lr * add_mean
+            post_mean: np.ndarray = cho_solve((c, lower), rhs, check_finite=False)
 
             # store previous beta for next iteration's local linearization
             beta0 = beta.copy()
@@ -241,9 +240,9 @@ class CoxMHSampler(CoxSampler):
             sum_event_linpred: float = np.sum(self.covariates[event_idxs, :].dot(beta))
             # set of at risk
             at_risk_idx: np.ndarray = np.where(time >= t)[0]
-            sum_exp_at_risk_linpred: float = np.sum(np.exp(self.covariates[at_risk_idx, :].dot(beta)))
+            log_sum_at_risk_linpred: float = logsumexp(self.covariates[at_risk_idx, :].dot(beta))
 
-            log_pl += sum_event_linpred - len(event_idxs) * np.log(sum_exp_at_risk_linpred)
+            log_pl += sum_event_linpred - len(event_idxs) * log_sum_at_risk_linpred
         return log_pl
 
     def log_pl_posterior(
@@ -272,16 +271,101 @@ class CoxMHSampler(CoxSampler):
         log_pl_post: float = self.log_partial_likelihood(beta, time, event)
         return log_pl_prior + lr * log_pl_post
 
+    def approximate_hessian(
+        self,
+        beta: np.ndarray,
+        time: np.ndarray,
+        event: np.ndarray,
+        lr: float,
+        cov0: float,
+        h: float = 1e-5,
+    ) -> np.ndarray:
+        """Approximate Hessian matrix
+
+        Args:
+            beta (np.ndarray): parameters
+            time (np.ndarray): time of occurring event
+            event (np.ndarray): event flg (1: occurred)
+            lr (float): learning rate for general bayes
+            cov0 (float): scale parameter for prior distribution. Defaults to 10.0.
+            h (float, optional): _description_. Defaults to 1e-5.
+
+        Returns:
+            np.ndarray: approximated Hessian matrix
+        """
+        H = np.zeros((self.dim_covariates, self.dim_covariates))
+        for i in range(self.dim_covariates):
+            for j in range(i, self.dim_covariates):
+                e_i = np.zeros(self.dim_covariates)
+                e_j = np.zeros(self.dim_covariates)
+                e_i[i] = 1
+                e_j[j] = 1
+
+                f_pp = self.log_pl_posterior(beta + h * e_i + h * e_j, time, event, lr, cov0)
+                f_pm = self.log_pl_posterior(beta + h * e_i - h * e_j, time, event, lr, cov0)
+                f_mp = self.log_pl_posterior(beta - h * e_i + h * e_j, time, event, lr, cov0)
+                f_mm = self.log_pl_posterior(beta - h * e_i - h * e_j, time, event, lr, cov0)
+
+                H[i, j] = (f_pp - f_pm - f_mp + f_mm) / (4 * h * h)
+                H[j, i] = H[i, j]
+        return H
+
+    def cox_mh_with_hessian_sample(
+        self,
+        time: np.ndarray,
+        event: np.ndarray,
+        n_iter: int = 1000,
+        lr: float = 1.0,
+        beta_init: Optional[np.ndarray] = None,
+        prior_cov_value: Optional[float] = None,
+        scaling: float = 1.0,
+    ) -> Tuple[np.ndarray, float]:
+        """
+        Metropolis–Hastingsサンプリング（局所ヘッセ行列に基づく提案分布を利用）
+        """
+        beta_samples: Deque[np.ndarray] = deque()
+        cov0: float = prior_cov_value if prior_cov_value is not None else 100
+        beta: np.ndarray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
+
+        log_pl_post: float = self.log_pl_posterior(beta, time, event, lr, cov0)
+        accept_count: int = 0
+
+        for _ in range(n_iter):
+            # approximate hessian matrix using current beta
+            H: np.ndarray = self.approximate_hessian(beta, time, event, lr, cov0, h=1e-5)
+            # negative hessian matrix
+            neg_H: np.ndarray = -H
+            try:
+                # neg_H^-1: covariance matrix of proposal distribution
+                _check = np.linalg.cholesky(neg_H)  # check positive definite  # noqa: F841
+                prop_cov: np.ndarray = scaling * np.linalg.inv(neg_H)
+            except np.linalg.LinAlgError:
+                # fallback
+                prop_cov = scaling * np.eye(self.dim_covariates) * 0.1
+
+            # sampling from multivariate normal distribution
+            beta_proposal: np.ndarray = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), prop_cov)
+            log_pl_post_proposal: float = self.log_pl_posterior(beta_proposal, time, event, lr, cov0)
+            log_alpha: float = log_pl_post_proposal - log_pl_post
+            # compare with log(Uniform(0,1))
+            if np.log(np.random.uniform(0, 1)) < log_alpha:
+                beta = beta_proposal
+                log_pl_post = log_pl_post_proposal
+                accept_count += 1
+            beta_samples.append(beta)
+
+        accept_rate: float = accept_count / n_iter
+        return np.array(beta_samples), accept_rate
+
     def cox_mh_sample(
         self,
         time: np.ndarray,
         event: np.ndarray,
         n_iter: int = 1000,
-        burn_in: int = 500,
         lr: float = 1.0,
         beta_init: Optional[np.ndarray] = None,
         prior_cov_value: Optional[float] = None,
-        proposal_scale: float = 0.1,
+        proposal_scale: float = 10,
     ) -> Tuple[np.ndarray, float]:
         """Sampling by Metropolis-Hastings algorithm
 
@@ -289,7 +373,6 @@ class CoxMHSampler(CoxSampler):
             time (np.ndarray): time of occurring event
             event (np.ndarray): event flg (1: occurred)
             n_iter (int, optional): iteration of sampling. Defaults to 1000.
-            burn_in (int, optional): burn in of sampling. Defaults to 500.
             lr (float, optional): learning rate for generalized Bayesian framework. Defaults to 1.0.
             beta_init (Optional[np.ndarray], optional): initial beta. Defaults to None.
             prior_cov_value (Optional[float], optional): covariance of prior distribution. Defaults to None.
@@ -303,13 +386,14 @@ class CoxMHSampler(CoxSampler):
         beta_samples: Deque[np.ndarray] = deque()
         cov0: float = prior_cov_value if prior_cov_value is not None else 100
         beta: np.ndarray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
+        prop_cov: np.ndarray = np.eye(self.dim_covariates) * proposal_scale
 
         log_pl_post: float = self.log_pl_posterior(beta, time, event, lr, cov0)
         accept_count: int = 0
 
         for _ in range(n_iter):
             # proposal distribution: multi variable normal distribution
-            beta_proposal: np.ndarray = beta + np.random.normal(0, proposal_scale, size=self.dim_covariates)
+            beta_proposal: np.ndarray = beta + np.random.multivariate_normal(beta, prop_cov)
             log_pl_post_proposal: float = self.log_pl_posterior(beta_proposal, time, event, lr, cov0)
             # accept probability for log
             log_alpha: float = log_pl_post_proposal - log_pl_post
