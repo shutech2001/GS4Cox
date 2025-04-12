@@ -16,11 +16,14 @@ np.set_printoptions(precision=2, suppress=True)
 
 def preprocess4cox(
     df: pd.DataFrame,
+    id_col_name: str,
     time_col_name: str,
     event_col_name: str,
     event_ind: int
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    covariate_columns = [col for col in df.columns if col not in [f'{time_col_name}', f'{event_col_name}']]
+    covariate_columns = [
+        col for col in df.columns if col not in [f'{id_col_name}', f'{time_col_name}', f'{event_col_name}']
+    ]
     covariates: np.ndarray = df[covariate_columns].to_numpy()
     time: np.ndarray = df[f'{time_col_name}'].to_numpy()
     event: np.ndarray = (df[f'{event_col_name}'] == event_ind).astype(int).to_numpy()
@@ -55,7 +58,7 @@ if __name__ == '__main__':
     df = _df.dropna()
     print('loading completed!')
 
-    covariates, time, event = preprocess4cox(df, 'time', 'status', 2)
+    covariates, time, event = preprocess4cox(df, 'inst', 'time', 'status', 2)
     # Estimate by Cox-PG Gibbs sampler
     cpg = GBCoxPGSampler(covariates=covariates)
     start = t.time()

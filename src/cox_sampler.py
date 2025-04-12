@@ -393,7 +393,7 @@ class CoxMHSampler(CoxSampler):
 
         for _ in range(n_iter):
             # proposal distribution: multi variable normal distribution
-            beta_proposal: np.ndarray = beta + np.random.multivariate_normal(beta, prop_cov)
+            beta_proposal: np.ndarray = np.random.multivariate_normal(beta, prop_cov)
             log_pl_post_proposal: float = self.log_pl_posterior(beta_proposal, time, event, lr, cov0)
             # accept probability for log
             log_alpha: float = log_pl_post_proposal - log_pl_post
