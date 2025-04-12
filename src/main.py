@@ -6,7 +6,7 @@ import pandas as pd  # type: ignore
 from lifelines import CoxPHFitter  # type: ignore
 
 from cox_sampler import GBCoxPGSampler, CoxMHSampler
-from data import SyntheticDataGenerater4CoxReg, import_r_data
+from data import SyntheticDataGenerater4CoxReg
 from eval import compute_esr, compute_ess
 
 
@@ -82,26 +82,26 @@ if __name__ == '__main__':
     parser.add_argument(
         '--data-size', '--N',
         type=int,
-        default=100,
-        help='sample size (default: 100).'
+        default=300,
+        help='sample size (default: 300).'
     )
     parser.add_argument(
         '--beta-true', '--T',
         type=parse_beta,
-        default='1.0,0.5',
-        help="true value of coefficents (default: '1.0,0.5')."
+        default='3.0,1.5',
+        help="true value of coefficents (default: '3.0,1.5')."
     )
     parser.add_argument(
         '--iteration', '--I',
         type=int,
-        default=500,
-        help='the number of total iterations (default: 500).'
+        default=1000,
+        help='the number of total iterations (default: 1000).'
     )
     parser.add_argument(
         '--burn-in', '--B',
         type=int,
-        default=400,
-        help='the number of burn-in (default: 400).'
+        default=500,
+        help='the number of burn-in (default: 500).'
     )
     parser.add_argument(
         '--use-ties', '--U',
@@ -125,5 +125,3 @@ if __name__ == '__main__':
         use_ties=args.use_ties,
         rounding=args.rounding,
     )
-
-    df = import_r_data(dataset_name='lung', package_name='survival')
