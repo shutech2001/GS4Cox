@@ -18,7 +18,7 @@ class SyntheticDataGenerater4CoxReg:
         """Generate synthetic data for Cox regression
 
         Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray]:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]:
                 covariates: covariates data
                 time: observed time
                 event: identifier of event (1: event occurred, 0: not occurred)

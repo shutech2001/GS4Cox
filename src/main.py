@@ -7,7 +7,7 @@ from lifelines import CoxPHFitter  # type: ignore
 
 from cox_sampler import GBCoxPGSampler, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
-from eval import compute_esr, compute_ess
+from evaluation_metrics import compute_esr, compute_ess
 
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
@@ -143,7 +143,7 @@ if __name__ == '__main__':
         '--proposal-scale', '--P',
         type=float,
         default=10,
-        help='covariance scale for proposal distribution (default: 10).'
+        help='covariance scale of proposal distribution for Metropolis-Hastings (default: 10).'
     )
     args = parser.parse_args()
 

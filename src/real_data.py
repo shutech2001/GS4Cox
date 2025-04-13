@@ -8,7 +8,7 @@ from lifelines import CoxPHFitter  # type: ignore
 
 from cox_sampler import GBCoxPGSampler, CoxMHSampler
 from data import import_r_data
-from eval import compute_ess, compute_esr
+from evaluation_metrics import compute_ess, compute_esr
 
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
@@ -21,6 +21,21 @@ def preprocess4cox(
     event_col_name: str,
     event_ind: int
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Preprocessing for MCMC
+
+    Args:
+        df (pd.DataFrame): dataframe
+        id_col_name (str): column name of representing ID
+        time_col_name (str): column name of representing observed time
+        event_col_name (str): column name of representing event indicator
+        event_ind (int): indicator of event
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            covariates: covariates data
+            time: observed time
+            event: identifier of event (1: event occurred, 0: not occurred)
+    """
     covariate_columns = [
         col for col in df.columns if col not in [f'{id_col_name}', f'{time_col_name}', f'{event_col_name}']
     ]
@@ -33,6 +48,42 @@ def preprocess4cox(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Cox Regression Simulation with Cox-PG Sampler and naive Cox Regression'
+    )
+    parser.add_argument(
+        '--package', '--P',
+        type=str,
+        default='survival',
+        help='name of the R package that contains the data to be imported (default: "survival").'
+    )
+    parser.add_argument(
+        '--dataset', '--D',
+        type=str,
+        default='lung',
+        help='name of the R dataset (default: "lung").'
+    )
+    parser.add_argument(
+        '--id-col-name', '--IC',
+        type=str,
+        default='inst',
+        help='column name of representing `ID` (default: "inst").'
+    )
+    parser.add_argument(
+        '--time-col-name', '--TC',
+        type=str,
+        default='time',
+        help='column name of representing `time` (default: "time").'
+    )
+    parser.add_argument(
+        '--event-col-name', '--EC',
+        type=str,
+        default='status',
+        help='column name of representing `event status` (default: "status").'
+    )
+    parser.add_argument(
+        '--event-indicator', '--EI',
+        type=int,
+        default=2,
+        help='indicator representing the event in the `event-col-name` (default: 2).'
     )
     parser.add_argument(
         '--iteration', '--I',
@@ -54,11 +105,13 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    _df: pd.DataFrame = import_r_data(dataset_name='lung', package_name='survival')
+    _df: pd.DataFrame = import_r_data(dataset_name=args.dataset, package_name=args.package)
     df = _df.dropna()
     print('loading completed!')
 
-    covariates, time, event = preprocess4cox(df, 'inst', 'time', 'status', 2)
+    covariates, time, event = preprocess4cox(
+        df, args.id_col_name, args.time_col_name, args.event_col_name, args.event_indicator,
+    )
     # Estimate by Cox-PG Gibbs sampler
     cpg = GBCoxPGSampler(covariates=covariates)
     start = t.time()

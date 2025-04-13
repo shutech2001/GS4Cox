@@ -46,10 +46,3 @@ def compute_esr(chain: np.ndarray, runtime: float) -> np.ndarray:
     """
     ess: np.ndarray = compute_ess(chain)
     return ess / runtime
-
-
-def compute_dist(chain):
-    differences = np.diff(chain, axis=0)
-    distances = np.linalg.norm(differences, axis=1)
-    avg_dist = np.mean(distances)
-    return avg_dist

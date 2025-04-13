@@ -51,7 +51,7 @@ class CoxSampler:
 
 
 class GBCoxPGSampler(CoxSampler):
-    """Cox-P\'olya-Gamma Gibbs sampler in Generalized Bayesian framework
+    """Cox-P\'olya-Gamma Gibbs sampler in general Bayesian framework
     """
     def __init__(self, covariates: np.ndarray) -> None:
         super().__init__(covariates)
@@ -212,6 +212,8 @@ class GBCoxPGSampler(CoxSampler):
 
 
 class CoxMHSampler(CoxSampler):
+    """Metropolis sampler for Cox regression model in general Bayesian framework
+    """
     def __init__(self, covariates: np.ndarray) -> None:
         super().__init__(covariates)
 
