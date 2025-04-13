@@ -1,6 +1,6 @@
 import argparse
 import time as t
-import numpy as np
+import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore

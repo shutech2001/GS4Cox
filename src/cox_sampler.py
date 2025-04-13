@@ -1,7 +1,7 @@
 from collections import deque
 from typing import Optional, Tuple, Dict, Deque
 
-import numpy as np
+import numpy as np  # type: ignore
 from scipy.linalg import cho_factor, cho_solve  # type: ignore
 from scipy.special import logsumexp  # type: ignore
 from polyagamma import random_polyagamma  # type: ignore

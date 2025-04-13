@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np  # type: ignore
 from statsmodels.tsa import stattools  # type: ignore
 
 
