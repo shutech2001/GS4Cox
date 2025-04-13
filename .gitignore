@@ -175,3 +175,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# result
+real_result/
+synthetic_result/
