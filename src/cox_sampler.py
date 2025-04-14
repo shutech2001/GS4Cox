@@ -204,7 +204,7 @@ class GBCoxPGSampler(CoxSampler):
             post_mean: np.ndarray = cho_solve((c, lower), rhs, check_finite=False)
 
             # store previous beta for next iteration's local linearization
-            beta0 = beta.copy()
+            beta0 = post_mean.copy()
             beta = np.random.multivariate_normal(post_mean, post_cov)
             beta_samples.append(beta)
 

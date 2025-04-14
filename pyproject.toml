@@ -1,5 +1,5 @@
 [project]
-name = "polya-gamma-for-cox"
+name = "GBCoxPGSampler"
 version = "0.1.0"
 description = ""
 authors = [

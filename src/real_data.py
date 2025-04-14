@@ -1,7 +1,7 @@
 import argparse
 from typing import Tuple
 import time as t
-import numpy as np  # type: ignore
+import numpy as np
 import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
@@ -98,7 +98,7 @@ if __name__ == '__main__':
         help='the number of burn-in (default: 500).'
     )
     parser.add_argument(
-        '--proposal-scale', '--P',
+        '--proposal-scale', '--PS',
         type=float,
         default=10,
         help='covariance scale for proposal distribution (default: 10).'

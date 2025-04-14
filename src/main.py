@@ -1,6 +1,6 @@
 import argparse
 import time as t
-import numpy as np  # type: ignore
+import numpy as np
 import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
@@ -140,7 +140,7 @@ if __name__ == '__main__':
         help='rounding unit for generating tie data (default: 0.001).'
     )
     parser.add_argument(
-        '--proposal-scale', '--P',
+        '--proposal-scale', '--PS',
         type=float,
         default=10,
         help='covariance scale of proposal distribution for Metropolis-Hastings (default: 10).'
