@@ -1,11 +1,12 @@
 import argparse
 import time as t
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_sampler import GBCoxPGSampler, CoxMHSampler
+from cox_sampler import GBPairwiseCoxPGSampler, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
 from evaluation_metrics import compute_esr, compute_ess
 
@@ -15,7 +16,7 @@ np.set_printoptions(precision=2, suppress=True)
 
 def run_simulation(
     n: int,
-    beta_true: np.ndarray,
+    beta_true: NDArray,
     learning_rate: float,
     n_iter: int,
     burn_in: int,
@@ -31,12 +32,12 @@ def run_simulation(
         covariates, time, event = data_generater.simulate_cox_data()
 
     # Estimate by Cox-PG Gibbs sampler
-    cpg = GBCoxPGSampler(covariates=covariates)
+    cpg = GBPairwiseCoxPGSampler(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
+    cpg_samples: NDArray = cpg.gb_pairwise_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
     print(f'{end - start}')
-    cpg_burn_in: np.ndarray = cpg_samples[burn_in:]
+    cpg_burn_in: NDArray = cpg_samples[burn_in:]
     print(f'Estimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
     print(f'compute ess: {compute_ess(cpg_samples).mean(axis=0):.2f}')
     print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start).mean(axis=0):.2f}')
@@ -50,7 +51,7 @@ def run_simulation(
     )
     end = t.time()
     print(f'{end - start}')
-    cmh_burn_in: np.ndarray = cmh_samples[burn_in:]
+    cmh_burn_in: NDArray = cmh_samples[burn_in:]
     print(f'Estimated coefficients by Cox-MH: {cmh_burn_in.mean(axis=0)}')
     print(f'acceptance rate: {acceptance_rate:.2f}')
     print(f'compute ess: {compute_ess(cmh_burn_in).mean(axis=0):.2f}')
@@ -61,7 +62,7 @@ def run_simulation(
     cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
     print(f'{end - start}')
-    cmh_h_burn_in: np.ndarray = cmh_h_samples[burn_in:]
+    cmh_h_burn_in: NDArray = cmh_h_samples[burn_in:]
     print(f'Estimated coefficients by Cox-MH optimal: {cmh_h_burn_in.mean(axis=0)}')
     print(f'acceptance rate: {acceptance_rate:.2f}')
     print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')

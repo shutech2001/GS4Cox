@@ -6,6 +6,15 @@ from rpy2.robjects.packages import importr  # type: ignore
 
 
 def import_r_data(dataset_name: str, package_name: str) -> pd.DataFrame:
+    """Import R open dataset from specified package
+
+    Args:
+        dataset_name (str): dataset name
+        package_name (str): package name with data to import
+
+    Returns:
+        pd.DataFrame: imported data
+    """
     # activate auto convert
     pandas2ri.activate()
     # import package

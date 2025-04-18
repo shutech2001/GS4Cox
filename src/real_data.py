@@ -6,12 +6,13 @@ import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_sampler import GBCoxPGSampler, CoxMHSampler
+from cox_sampler import GBPairwiseCoxPGSampler, CoxMHSampler
 from data import import_r_data
 from evaluation_metrics import compute_ess, compute_esr
+from select_learning_rate import SelectLearningRate
 
 # global setting for output
-np.set_printoptions(precision=2, suppress=True)
+# np.set_printoptions(precision=2, suppress=True)
 
 
 def preprocess4cox(
@@ -58,32 +59,32 @@ if __name__ == '__main__':
     parser.add_argument(
         '--dataset', '--D',
         type=str,
-        default='lung',
-        help='name of the R dataset (default: "lung").'
+        default='mgus2',
+        help='name of the R dataset (default: "mgus2").'
     )
     parser.add_argument(
         '--id-col-name', '--IC',
         type=str,
-        default='inst',
-        help='column name of representing `ID` (default: "inst").'
+        default='id',
+        help='column name of representing `ID` (default: "id").'
     )
     parser.add_argument(
         '--time-col-name', '--TC',
         type=str,
-        default='time',
-        help='column name of representing `time` (default: "time").'
+        default='futime',
+        help='column name of representing `time` (default: "futime").'
     )
     parser.add_argument(
         '--event-col-name', '--EC',
         type=str,
-        default='status',
-        help='column name of representing `event status` (default: "status").'
+        default='death',
+        help='column name of representing `event status` (default: "death").'
     )
     parser.add_argument(
         '--event-indicator', '--EI',
         type=int,
-        default=2,
-        help='indicator representing the event in the `event-col-name` (default: 2).'
+        default=1,
+        help='indicator representing the event in the `--event-col-name` (default: 1).'
     )
     parser.add_argument(
         '--iteration', '--I',
@@ -107,15 +108,32 @@ if __name__ == '__main__':
 
     _df: pd.DataFrame = import_r_data(dataset_name=args.dataset, package_name=args.package)
     df = _df.dropna()
-    print('loading completed!')
+    print(f'[COMPLETED] loading {args.dataset} from {args.package}')
 
     covariates, time, event = preprocess4cox(
         df, args.id_col_name, args.time_col_name, args.event_col_name, args.event_indicator,
     )
+    df4cox = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(covariates.shape[1])])
+    df4cox['time'] = time
+    df4cox['event'] = event
+    cph = CoxPHFitter()
+    cph.fit(df4cox, duration_col='time', event_col='event')
+    print("\nEstimated coefficients by normal cox:", np.array(cph.params_))
+
+    slr = SelectLearningRate(GBPairwiseCoxPGSampler, 'gb_pairwise_cox_pg_sample', covariates, time, event)
+    lr = slr.select_eta_gpc(point_estimate=np.array(cph.params_), bootstrap=200)
+    print(f'gb pairwise cox learning rate: {lr}')
+    exit(1)
+
+    slr = SelectLearningRate(CoxMHSampler, 'cox_mh_with_hessian_sample', covariates, time, event)
+    lr = slr.select_eta_gpc(point_estimate=np.array(cph.params_), bootstrap=200)
+    print(f'cox mh with hessian learning rate: {lr}')
+    exit(1)
+
     # Estimate by Cox-PG Gibbs sampler
-    cpg = GBCoxPGSampler(covariates=covariates)
+    cpg = GBPairwiseCoxPGSampler(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=args.iteration)
+    cpg_samples: np.ndarray = cpg.gb_pairwise_cox_pg_sample(time, event, n_iter=args.iteration)
     end = t.time()
     print(f'{end - start}')
     cpg_burn_in: np.ndarray = cpg_samples[args.burn_in:]
