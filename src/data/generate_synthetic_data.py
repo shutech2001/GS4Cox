@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from typing import Tuple
 
@@ -12,7 +14,7 @@ class SyntheticDataGenerater4CoxReg:
             beta_true (NDArray): true value of parameters
             seed (int, optional): seed value. Defaults to 42.
         """
-        self.n: int = n
+        self.data_num: int = n
         self.beta_true: NDArray = beta_true
         self.seed: int = seed
 
@@ -27,11 +29,11 @@ class SyntheticDataGenerater4CoxReg:
         """
         np.random.seed(self.seed)
         num_param: int = len(self.beta_true)
-        covariates: NDArray = np.random.randn(self.n, num_param)
+        covariates: NDArray = np.random.randn(self.data_num, num_param)
         linpred: NDArray = covariates.dot(self.beta_true)
         # generate event time and censoring time from exponential distribution
         event_time: NDArray = np.random.exponential(scale=1/np.exp(linpred))
-        censor_time: NDArray = np.random.exponential(scale=1.0, size=self.n)
+        censor_time: NDArray = np.random.exponential(scale=1.0, size=self.data_num)
         # checking for observed time and occur event
         time: NDArray = np.minimum(event_time, censor_time)
         event: NDArray = (event_time <= censor_time).astype(int)
@@ -53,11 +55,11 @@ class SyntheticDataGenerater4CoxReg:
         """
         np.random.seed(self.seed)
         num_param: int = len(self.beta_true)
-        covariates: NDArray = np.random.randn(self.n, num_param)
+        covariates: NDArray = np.random.randn(self.data_num, num_param)
         linpred: NDArray = covariates.dot(self.beta_true)
         # generate event time and censoring time from exponential distribution
         event_time: NDArray = np.random.exponential(scale=1/np.exp(linpred))
-        censor_time: NDArray = np.random.exponential(scale=1.0, size=self.n)
+        censor_time: NDArray = np.random.exponential(scale=1.0, size=self.data_num)
         # checking for observed time and occur event
         _time: NDArray = np.minimum(event_time, censor_time)
         # rounding time for occurring multi events in the same time
