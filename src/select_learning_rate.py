@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tqdm import tqdm  # type: ignore
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Type, Tuple
 import numpy as np
 from numpy.typing import NDArray
@@ -17,7 +18,8 @@ class SelectLearningRate:
         sampling_method_name: str,
         covariates: NDArray,
         time: NDArray,
-        event: NDArray
+        event: NDArray,
+        n_jobs: int = 1,
     ) -> None:
         """
         Args:
@@ -26,6 +28,7 @@ class SelectLearningRate:
             covariates (NDArray): covariates numpy array
             time (NDArray): observed time
             event (NDArray): event indicator
+            n_jobs (int): number of parallel processing
         """
         self.Sampler: Type[CoxSampler] = Sampler
         self.sampling_method_name: str = sampling_method_name
@@ -35,13 +38,11 @@ class SelectLearningRate:
         self.data_num: int
         self.dim_covariates: int
         self.data_num, self.dim_covariates = covariates.shape
+        self.n_jobs: int = n_jobs
 
     def compute_region(
         self,
-        eta: float,
-        alpha: float,
-        n_iter: int,
-        burn_in: int,
+        args: Tuple[float, float, int, int],
     ) -> Tuple[NDArray, NDArray]:
         """Compute alpha/2 - 1-alpha/2 quantiles
 
@@ -56,6 +57,7 @@ class SelectLearningRate:
                 - lower bounds of (1-alpha) credible interval
                 - upper bounds of (1-alpha) credible interval
         """
+        eta, alpha, n_iter, burn_in = args
         # draw bootstrap indices
         idx = np.random.choice(self.data_num, size=self.data_num, replace=True)
         time_b, event_b, covariates_b = self.time[idx], self.event[idx], self.covariates[idx]
@@ -67,47 +69,67 @@ class SelectLearningRate:
         chain_b: NDArray = sampling_method(time_b, event_b, n_iter=n_iter, lr=eta)
         chain_b = chain_b[burn_in:]
 
+        # Gibbs samplingの場合はコメントアウト外す
+        # # 既存 Gibbs で得た pairwise MAP (最後のサンプル平均など)
+        # beta_pair = chain_b.mean(axis=0)
+
+        # # ① Cox PL スコア & Hessian
+        # score, hess = cox_score_and_hess(beta_pair, self.covariates, self.time, self.event)
+
+        # # ② 1‑step 補正
+        # chain_b += np.linalg.solve(hess, score)
+
         # compute the α/2 and 1-α/2 quantiles
-        lo: NDArray = np.quantile(chain_b, alpha/2, axis=0)
-        hi: NDArray = np.quantile(chain_b, 1 - alpha/2, axis=0)
-        return lo, hi
+        lower: NDArray = np.quantile(chain_b, alpha/2, axis=0)
+        upper: NDArray = np.quantile(chain_b, 1 - alpha/2, axis=0)
+        return lower, upper
 
     def select_eta_gpc(
         self,
         point_estimate: NDArray,
         alpha: float = 0.05,
-        max_iter: int = 30,
+        max_iter: int = 1000,
         tol: float = 1e-3,
         eta_init: float = 1.0,
-        bootstrap: int = 200,
-        n_iter: int = 500,
-        burn_in: int = 400,
+        bootstrap: int = 1000,
+        n_iter: int = 1000,
+        burn_in: int = 500,
     ) -> float:
         """Select learning rate by Generalized Posterior Calibration (proposed by Syring and Martin, 2019)
 
         Args:
-            point_estimate (NDArray): MLE estimates
+            point_estimate (NDArray): point estimates, such as MLE, MPLE
             alpha (float, optional): (1-alpha) credible interval. Defaults to 0.05.
-            max_iter (int, optional): iteration of optimizing learning rate. Defaults to 30.
+            max_iter (int, optional): iteration of optimizing learning rate. Defaults to 1000.
             tol (float, optional): sequential renewal criteria (stop iteration when met). Defaults to 1e-3.
             eta_init (float, optional): initial value of learning rate. Defaults to 1.0.
-            bootstrap (int, optional): the number of bootstrap. Defaults to 200.
-            n_iter (int, optional): iteration of sampling in bootstrap. Defaults to 500.
-            burn_in (int, optional): iteration from sampling in bootstrap. Defaults to 400.
+            bootstrap (int, optional): the number of bootstrap. Defaults to 1000.
+            n_iter (int, optional): iteration of sampling in bootstrap. Defaults to 1000.
+            burn_in (int, optional): iteration from sampling in bootstrap. Defaults to 500.
 
         Returns:
             float: learning rate
         """
         eta: float = eta_init
-        for t in tqdm(range(1, max_iter + 1)):
+        for t in range(1, max_iter + 1):
             cover_true: float = 0
-            for _ in tqdm(range(bootstrap)):
-                lower, upper = self.compute_region(eta, alpha, n_iter, burn_in)
-                mask = np.logical_and(lower <= point_estimate, point_estimate <= upper)
-                cover_true += float(mask.all())
+            # prepare arguments list for parallel processing
+            args_list = [(eta, alpha, n_iter, burn_in)] * bootstrap
+
+            # execute parallel processing
+            with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
+                futures = [executor.submit(self.compute_region, args) for args in args_list]
+                # for checking progress bar
+                for future in tqdm(as_completed(futures), total=bootstrap, desc=f"Boot[{t}]"):
+                    lower, upper = future.result()
+                    mask = np.logical_and(lower <= point_estimate, point_estimate <= upper)
+                    cover_true += float(mask.all())
+
             cover = cover_true/bootstrap
+            # print(f'cover: {cover}') 
             eta += (1/t) * (cover - (1-alpha))
             eta = max(eta, 1e-4)
+            # print(f'eta: {eta}')
             if abs(cover - (1-alpha)) < tol:
                 break
         return float(eta)
