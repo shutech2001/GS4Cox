@@ -54,8 +54,8 @@ class CoxSampler:
         return risk_sets, event_times, event_nums
 
 
-class GBPairwiseCoxPGSampler(CoxSampler):
-    """Cox-P\'olya-Gamma Gibbs sampler in general Bayesian framework with Pairwise likelihood
+class GS4Cox(CoxSampler):
+    """Cox-P\'olya-Gamma Gibbs sampler in general Bayesian framework with composite partial likelihood
     """
     def __init__(self, covariates: NDArray) -> None:
         super().__init__(covariates)
@@ -67,7 +67,7 @@ class GBPairwiseCoxPGSampler(CoxSampler):
         event_nums: Deque[int],
     ) -> Tuple[NDArray, NDArray]:
         """
-        Vectorized construction of all (i,j) pairs for pairwise likelihood.
+        Vectorized construction of all (i,j) pairs for composite partial likelihood.
         Returns arrays of event indices and risk-set indices.
 
         Args:
@@ -100,7 +100,61 @@ class GBPairwiseCoxPGSampler(CoxSampler):
             pairs_j = np.array([])
         return pairs_i, pairs_j
 
-    def gb_pairwise_cox_pg_sample(
+    def compute_shifting_term(
+        self,
+        beta_center: NDArray,
+        time: NDArray,
+        event: NDArray,
+    ) -> Tuple[NDArray, NDArray]:
+        """Compute score vector and observed (negative) Hessian of the
+        Cox partial log‑likelihood at *beta*.
+
+        Args:
+            beta_center:   (p,) current parameter
+            covariates: (n, p) design matrix
+            time:  (n,) event/censoring times
+            event: (n,) event indicator (1=event, 0=censor)
+
+        Returns
+        -------
+        score : (p,)  first derivative ∂ℓ/∂β
+        hess  : (p,p) negative second derivative -H (observed info)
+        """
+        self.data_num, self.dim_covariates
+        idx = np.argsort(-time)
+        X = self.covariates[idx]
+        d = event[idx]
+
+        eta = X @ beta_center
+        e_eta = np.exp(eta)
+
+        # cumulative sums over risk sets
+        cum_e_eta = np.cumsum(e_eta)
+        cum_Xe = np.cumsum((X * e_eta[:, None]), axis=0)
+        # cumulative second moment ∑ e^η x xᵀ  – compute via outer products
+        cum_S2 = np.zeros((self.data_num, self.dim_covariates, self.dim_covariates))
+        outer = np.einsum("ni,nj->nij", X, X)
+        cum_S2[0] = e_eta[0] * outer[0]
+        for k in range(1, self.data_num):
+            cum_S2[k] = cum_S2[k-1] + e_eta[k] * outer[k]
+
+        score = np.zeros(self.dim_covariates)
+        hess = np.zeros((self.dim_covariates, self.dim_covariates))
+
+        for k in range(self.data_num):
+            if d[k] == 0:
+                continue
+            S0 = cum_e_eta[k]
+            S1 = cum_Xe[k]
+            S2 = cum_S2[k]
+            weight = 1.0 / S0
+            mean = S1 * weight
+            score += X[k] - mean
+            hess += (S2 / S0) - np.outer(mean, mean)
+
+        return score, hess
+
+    def composite_gb_cox_pg_sample(
         self,
         time: NDArray,
         event: NDArray,
@@ -110,7 +164,7 @@ class GBPairwiseCoxPGSampler(CoxSampler):
         prior_mean: Optional[NDArray] = None,
         prior_cov: Optional[NDArray] = None,
     ) -> NDArray:
-        """Sampling via PG-augmented pairwise Cox Partial likelihood with vectorized updates.
+        """Sampling via PG-augmented composite Cox Partial likelihood with vectorized updates.
 
         Args:
             time (NDArray): observed time
@@ -363,15 +417,19 @@ class CoxMHSampler(CoxSampler):
                 cov_prop = scaling * np.linalg.inv(-H)
                 # 正定値確認
                 np.linalg.cholesky(cov_prop)
+                # MHステップ
+                beta_prop = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
             except np.linalg.LinAlgError:
                 cov_prop = scaling * np.eye(self.dim_covariates) * 0.1
+                # MHステップ
+                beta_prop = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
 
-            # MHステップ
-            beta_prop = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
             lp_prop = self.log_partial_likelihood(beta_prop, time, event) * lr - 0.5 * np.sum(beta_prop**2)/(cov0**2)
             if np.log(np.random.rand()) < (lp_prop - lp_post):
                 beta, lp_post = beta_prop, lp_prop
                 accept += 1
 
             beta_samples.append(beta)
+
+        print(f'acceptance rate: {accept/n_iter:.2f}')
         return np.array(beta_samples)

@@ -6,7 +6,7 @@ import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_sampler import GBPairwiseCoxPGSampler, CoxMHSampler
+from cox_sampler import GS4Cox, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
 from evaluation_metrics import compute_esr, compute_ess
 
@@ -32,42 +32,26 @@ def run_simulation(
         covariates, time, event = data_generater.simulate_cox_data()
 
     # Estimate by Cox-PG Gibbs sampler
-    cpg = GBPairwiseCoxPGSampler(covariates=covariates)
+    cpg = GS4Cox(covariates=covariates)
     start = t.time()
-    cpg_samples: NDArray = cpg.gb_pairwise_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
+    cpg_samples: NDArray = cpg.composite_gb_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
-    print(f'{end - start}')
     cpg_burn_in: NDArray = cpg_samples[burn_in:]
     print(f'Estimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
+    print(f'executing time: {end - start:.2f}')
     print(f'compute ess: {compute_ess(cpg_samples).mean(axis=0):.2f}')
     print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cpg_samples)}')
 
     # Estimate by Cox MH sampler
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
-    cmh_samples, acceptance_rate = cmh.cox_mh_sample(
-        time, event, n_iter=n_iter, lr=learning_rate, proposal_scale=proposal_scale
-    )
+    cmh_h_samples = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
-    print(f'{end - start}')
-    cmh_burn_in: NDArray = cmh_samples[burn_in:]
-    print(f'Estimated coefficients by Cox-MH: {cmh_burn_in.mean(axis=0)}')
-    print(f'acceptance rate: {acceptance_rate:.2f}')
-    print(f'compute ess: {compute_ess(cmh_burn_in).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(cmh_burn_in, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cmh_samples)}')
-
-    start = t.time()
-    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
-    end = t.time()
-    print(f'{end - start}')
     cmh_h_burn_in: NDArray = cmh_h_samples[burn_in:]
     print(f'Estimated coefficients by Cox-MH optimal: {cmh_h_burn_in.mean(axis=0)}')
-    print(f'acceptance rate: {acceptance_rate:.2f}')
+    print(f'executing time: {end - start:.2f}')
     print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
     print(f'compute esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cmh_samples)}')
 
     # Estimate by naive Cox Regression
     df = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(len(beta_true))])

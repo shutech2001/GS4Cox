@@ -136,15 +136,15 @@ if __name__ == '__main__':
     else:
         lr_GS = lr
     # Estimate by GS4Cox
-    cpg = GS4Cox(covariates=covariates)
+    gs4c = GS4Cox(covariates=covariates)
     start = t.time()
-    cpg_samples: np.ndarray = cpg.composite_gb_cox_pg_sample(time, event, n_iter=args.iteration, lr=lr_GS)
+    gs4c_samples: np.ndarray = gs4c.composite_gb_cox_pg_sample(time, event, n_iter=args.iteration, lr=lr_GS)
     end = t.time()
-    print(f'{end - start}')
-    cpg_burn_in: np.ndarray = cpg_samples[args.burn_in:]
+    cpg_burn_in: np.ndarray = gs4c_samples[args.burn_in:]
     print(f'\nEstimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
-    print(f'compute ess: {compute_ess(cpg_samples).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start).mean(axis=0):.2f}')
+    print(f'executing time: {end - start:.2f}')
+    print(f'compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
+    print(f'compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
 
     if lr == 0:
         # select learning rate by GPC
@@ -156,11 +156,10 @@ if __name__ == '__main__':
     # Estimate by MH-Hessian
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
-    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=args.iteration, lr=lr_MH)
+    cmh_h_samples = cmh.cox_mh_with_hessian_sample(time, event, n_iter=args.iteration, lr=lr_MH)
     end = t.time()
-    print(f'{end - start}')
     cmh_h_burn_in: np.ndarray = cmh_h_samples[args.burn_in:]
     print(f'\nEstimated coefficients by Cox-MH: {cmh_h_burn_in.mean(axis=0)}')
-    print(f'acceptance rate: {acceptance_rate:.2f}')
+    print(f'executing time: {end - start:.2f}')
     print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
     print(f'compute esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
