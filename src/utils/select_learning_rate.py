@@ -47,10 +47,11 @@ class SelectLearningRate:
         """Compute alpha/2 - 1-alpha/2 quantiles
 
         Args:
-            eta (float): previous learning rate
-            alpha (float): (1-alpha) credible interval
-            n_iter (int): iteration of sampling
-            burn_in (int): burn-in from sampling
+            args:
+                eta (float): previous learning rate
+                alpha (float): (1-alpha) credible interval
+                n_iter (int): iteration of sampling
+                burn_in (int): burn-in from sampling
 
         Returns:
             Tuple[NDArray, NDArray]:
@@ -66,18 +67,8 @@ class SelectLearningRate:
         sampler_b: CoxSampler = self.Sampler(covariates_b)
         sampling_method = getattr(sampler_b, self.sampling_method_name)
         # run whichever sampling you use:
-        chain_b: NDArray = sampling_method(time_b, event_b, n_iter=n_iter, lr=eta)
+        chain_b: NDArray = sampling_method(time_b, event_b, n_iter=n_iter, burn_in=burn_in, lr=eta)
         chain_b = chain_b[burn_in:]
-
-        # Gibbs samplingの場合はコメントアウト外す
-        # # 既存 Gibbs で得た pairwise MAP (最後のサンプル平均など)
-        # beta_pair = chain_b.mean(axis=0)
-
-        # # ① Cox PL スコア & Hessian
-        # score, hess = cox_score_and_hess(beta_pair, self.covariates, self.time, self.event)
-
-        # # ② 1‑step 補正
-        # chain_b += np.linalg.solve(hess, score)
 
         # compute the α/2 and 1-α/2 quantiles
         lower: NDArray = np.quantile(chain_b, alpha/2, axis=0)
@@ -122,14 +113,14 @@ class SelectLearningRate:
                 # for checking progress bar
                 for future in tqdm(as_completed(futures), total=bootstrap, desc=f"Boot[{t}]"):
                     lower, upper = future.result()
-                    mask = np.logical_and(lower <= point_estimate, point_estimate <= upper)
+                    mask: NDArray = np.logical_and(lower <= point_estimate, point_estimate <= upper)
                     cover_true += float(mask.all())
 
-            cover = cover_true/bootstrap
-            # print(f'cover: {cover}') 
+            # compute coverage probability
+            cover: float = cover_true/bootstrap
+            # update learning rate
             eta += (1/t) * (cover - (1-alpha))
             eta = max(eta, 1e-4)
-            # print(f'eta: {eta}')
             if abs(cover - (1-alpha)) < tol:
                 break
         return float(eta)

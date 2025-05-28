@@ -9,8 +9,9 @@ from lifelines import CoxPHFitter  # type: ignore
 
 from cox_sampler import GS4Cox, CoxMHSampler
 from data import import_r_data
-from evaluation_metrics import compute_ess, compute_esr
-from select_learning_rate import SelectLearningRate
+from utils.evaluation_metrics import compute_ess, compute_esr
+from utils.select_learning_rate import SelectLearningRate
+from utils.pl_score_hessian import cox_score_and_hess
 
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
@@ -105,6 +106,12 @@ if __name__ == '__main__':
         default=1.0,
         help="learning rate for general Bayesian framework (default: 1.0). If set to 0, execute learning rate selection by GPC."  # noqa: E501
     )
+    parser.add_argument(
+        '--ablation-correction', '--A',
+        type=bool,
+        default=False,
+        help='set to `True` when comparing results with and without finite-sample corrections (default: False).'
+    )
     args = parser.parse_args()
 
     # import data
@@ -130,21 +137,41 @@ if __name__ == '__main__':
     lr: float = args.learning_rate
     if lr == 0:
         # select learning rate by GPC
-        slr_GS = SelectLearningRate(GS4Cox, 'composite_gb_cox_pg_sample', covariates, time, event)
+        slr_GS = SelectLearningRate(GS4Cox, 'gs4cox_with_finite_correction', covariates, time, event)
         lr_GS = slr_GS.select_eta_gpc(point_estimate=np.array(cph.params_))
         print(f'gb pairwise cox learning rate: {lr_GS}')
     else:
         lr_GS = lr
     # Estimate by GS4Cox
-    gs4c = GS4Cox(covariates=covariates)
-    start = t.time()
-    gs4c_samples: np.ndarray = gs4c.composite_gb_cox_pg_sample(time, event, n_iter=args.iteration, lr=lr_GS)
-    end = t.time()
-    cpg_burn_in: np.ndarray = gs4c_samples[args.burn_in:]
-    print(f'\nEstimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
-    print(f'executing time: {end - start:.2f}')
-    print(f'compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
+    if args.ablation_correction:
+        gs4c = GS4Cox(covariates=covariates)
+        start = t.time()
+        gs4c_samples: NDArray = gs4c.gs4cox_without_finite_correction(time, event, n_iter=args.iteration, lr=lr_GS)
+        end = t.time()
+        gs4c_burn_in: NDArray = gs4c_samples[args.burn_in:]
+        print(f'Estimated coefficients by GS4Cox (without finite correction): {gs4c_burn_in.mean(axis=0)}')
+        print(f'executing time: {end - start:.2f}')
+        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
+        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
+
+        # Estimate by GS4Cox without correction
+        score, hess = cox_score_and_hess(gs4c_burn_in.mean(axis=0), covariates, time, event)
+        gs4c_samples_corrected = gs4c_samples + np.linalg.solve(hess, score)
+        gs4c_burn_in_corrected: NDArray = gs4c_samples_corrected[args.burn_in:]
+        print(f'Estimated coefficients by GS4Cox (with finite correction): {gs4c_burn_in_corrected.mean(axis=0)}')
+
+    else:
+        gs4c = GS4Cox(covariates=covariates)
+        start = t.time()
+        gs4c_samples = gs4c.gs4cox_with_finite_correction(
+            time, event, n_iter=args.iteration, burn_in=args.burn_in, lr=lr_GS
+        )
+        end = t.time()
+        gs4c_burn_in = gs4c_samples[args.burn_in:]
+        print(f'Estimated coefficients by GS4Cox: {gs4c_burn_in.mean(axis=0)}')
+        print(f'executing time: {end - start:.2f}')
+        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
+        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
 
     if lr == 0:
         # select learning rate by GPC
