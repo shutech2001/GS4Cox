@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import argparse
 import time as t
-import numpy as np
-import pandas as pd  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
+import numpy as np
+from numpy.typing import NDArray
+import pandas as pd  # type: ignore
 
-from cox_sampler import GBCoxPGSampler, CoxMHSampler
+from cox_sampler import GS4Cox, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
-from evaluation_metrics import compute_esr, compute_ess
+from utils.evaluation_metrics import compute_esr, compute_ess
+from utils.pl_score_hessian import cox_score_and_hess
 
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
@@ -15,13 +19,13 @@ np.set_printoptions(precision=2, suppress=True)
 
 def run_simulation(
     n: int,
-    beta_true: np.ndarray,
+    beta_true: NDArray,
     learning_rate: float,
     n_iter: int,
     burn_in: int,
-    proposal_scale: float,
     use_ties: bool,
     rounding: float,
+    ablation_correction: bool = False,
 ) -> None:
     data_generater = SyntheticDataGenerater4CoxReg(n=n, beta_true=beta_true)
 
@@ -30,43 +34,45 @@ def run_simulation(
     else:
         covariates, time, event = data_generater.simulate_cox_data()
 
-    # Estimate by Cox-PG Gibbs sampler
-    cpg = GBCoxPGSampler(covariates=covariates)
-    start = t.time()
-    cpg_samples: np.ndarray = cpg.gb_cox_pg_sample(time, event, n_iter=n_iter, lr=learning_rate)
-    end = t.time()
-    print(f'{end - start}')
-    cpg_burn_in: np.ndarray = cpg_samples[burn_in:]
-    print(f'Estimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}')
-    print(f'compute ess: {compute_ess(cpg_samples).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(cpg_samples, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cpg_samples)}')
+    # Estimate by GS4Cox
+    if ablation_correction:
+        gs4c = GS4Cox(covariates=covariates)
+        start = t.time()
+        gs4c_samples: NDArray = gs4c.gs4cox_without_finite_correction(time, event, n_iter=n_iter, lr=learning_rate)
+        end = t.time()
+        gs4c_burn_in: NDArray = gs4c_samples[burn_in:]
+        print(f'Estimated coefficients by GS4Cox (without finite correction): {gs4c_burn_in.mean(axis=0)}')
+        print(f'executing time: {end - start:.2f}')
+        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
+        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
+
+        # Estimate by GS4Cox without correction
+        score, hess = cox_score_and_hess(gs4c_burn_in.mean(axis=0), covariates, time, event)
+        gs4c_samples_corrected = gs4c_samples + np.linalg.solve(hess, score)
+        gs4c_burn_in_corrected: NDArray = gs4c_samples_corrected[burn_in:]
+        print(f'Estimated coefficients by GS4Cox (with finite correction): {gs4c_burn_in_corrected.mean(axis=0)}')
+
+    else:
+        gs4c = GS4Cox(covariates=covariates)
+        start = t.time()
+        gs4c_samples = gs4c.gs4cox_with_finite_correction(time, event, n_iter=n_iter, burn_in=burn_in, lr=learning_rate)
+        end = t.time()
+        gs4c_burn_in = gs4c_samples[burn_in:]
+        print(f'Estimated coefficients by GS4Cox: {gs4c_burn_in.mean(axis=0)}')
+        print(f'executing time: {end - start:.2f}')
+        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
+        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
 
     # Estimate by Cox MH sampler
     cmh = CoxMHSampler(covariates=covariates)
     start = t.time()
-    cmh_samples, acceptance_rate = cmh.cox_mh_sample(
-        time, event, n_iter=n_iter, lr=learning_rate, proposal_scale=proposal_scale
-    )
+    cmh_h_samples = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
-    print(f'{end - start}')
-    cmh_burn_in: np.ndarray = cmh_samples[burn_in:]
-    print(f'Estimated coefficients by Cox-MH: {cmh_burn_in.mean(axis=0)}')
-    print(f'acceptance rate: {acceptance_rate:.2f}')
-    print(f'compute ess: {compute_ess(cmh_burn_in).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(cmh_burn_in, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cmh_samples)}')
-
-    start = t.time()
-    cmh_h_samples, acceptance_rate = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
-    end = t.time()
-    print(f'{end - start}')
-    cmh_h_burn_in: np.ndarray = cmh_h_samples[burn_in:]
-    print(f'Estimated coefficients by Cox-MH optimal: {cmh_h_burn_in.mean(axis=0)}')
-    print(f'acceptance rate: {acceptance_rate:.2f}')
-    print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
-    print(f'compute esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
-    # print(f'compute dist: {compute_dist(cmh_samples)}')
+    cmh_h_burn_in: NDArray = cmh_h_samples[burn_in:]
+    print(f'Estimated coefficients by MH optimal: {cmh_h_burn_in.mean(axis=0)}')
+    print(f'executing time: {end - start:.2f}')
+    print(f'Computed ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
+    print(f'Computed esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
 
     # Estimate by naive Cox Regression
     df = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(len(beta_true))])
@@ -74,7 +80,7 @@ def run_simulation(
     df['event'] = event
     cph = CoxPHFitter()
     cph.fit(df, duration_col='time', event_col='event')
-    print("Estimated coefficients by normal cox:", np.array(cph.params_))
+    print("Maximum partial likelihood estimates:", np.array(cph.params_))
 
 
 def parse_beta(beta_str: str) -> np.ndarray:
@@ -95,7 +101,7 @@ def parse_beta(beta_str: str) -> np.ndarray:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Cox Regression Simulation with Cox-PG Sampler and naive Cox Regression'
+        description='Cox Regression Simulation with GS4Cox, optimal MH and Standard Cox Regression'
     )
     parser.add_argument(
         '--data-size', '--N',
@@ -140,10 +146,10 @@ if __name__ == '__main__':
         help='rounding unit for generating tie data (default: 0.001).'
     )
     parser.add_argument(
-        '--proposal-scale', '--P',
-        type=float,
-        default=10,
-        help='covariance scale of proposal distribution for Metropolis-Hastings (default: 10).'
+        '--ablation-correction', '--A',
+        type=bool,
+        default=False,
+        help='set to `True` when comparing results with and without finite-sample corrections (default: False).'
     )
     args = parser.parse_args()
 
@@ -153,7 +159,7 @@ if __name__ == '__main__':
         learning_rate=args.learning_rate,
         n_iter=args.iteration,
         burn_in=args.burn_in,
-        proposal_scale=args.proposal_scale,
         use_ties=args.use_ties,
         rounding=args.rounding,
+        ablation_correction=args.ablation_correction
     )
