@@ -236,7 +236,7 @@ class GS4Cox(CoxSampler):
 class CoxMHSampler(CoxSampler):
     """Class of Metropolis-Hastings sampler for Cox regression model in general Bayesian framework
     """
-    def __init__(self, covariates: np.ndarray) -> None:
+    def __init__(self, covariates: NDArray) -> None:
         super().__init__(covariates)
 
     def log_partial_likelihood(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import time as t
+import warnings
 
 from lifelines import CoxPHFitter  # type: ignore
 import numpy as np
@@ -12,7 +14,9 @@ from cox_sampler import GS4Cox, CoxMHSampler
 from data import SyntheticDataGenerater4CoxReg
 from utils.evaluation_metrics import compute_esr, compute_ess
 from utils.pl_score_hessian import cox_score_and_hess
+from utils.plot_figure import PlotSyntheticResult
 
+warnings.filterwarnings('ignore')
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
 
@@ -80,17 +84,32 @@ def run_simulation(
     df['event'] = event
     cph = CoxPHFitter()
     cph.fit(df, duration_col='time', event_col='event')
-    print("Maximum partial likelihood estimates:", np.array(cph.params_))
+    cph_mple: NDArray = np.array(cph.params_)
+    print("Maximum partial likelihood estimates:", cph_mple)
+
+    # plot some figures
+    if ablation_correction:
+        psr = PlotSyntheticResult(
+            n_iter=n_iter,
+            mh_samples=cmh_h_samples,
+            gs4c_samples=gs4c_samples,
+            gs4c_samples_corrected=gs4c_samples_corrected,
+            cph_mpl_estimates=cph_mple,
+            savefig_root=Path('../fig'),
+        )
+        psr.pict_trace_plot(beta_true=beta_true)
+        psr.pict_post_dist(beta_true=beta_true, burn_in=burn_in)
+        psr.pict_correlogram(beta_true=beta_true)
 
 
-def parse_beta(beta_str: str) -> np.ndarray:
-    """Generate an np.ndarray from a comma-separated string
+def parse_beta(beta_str: str) -> NDArray:
+    """Generate an NDArray from a comma-separated string
 
     Args:
         beta_str (str): comma-separated parameter (e.g., 5.0,3.5)
 
     Returns:
-        np.ndarray: true coefficient vector
+        NDArray: true coefficient vector
     """
     try:
         beta_list: list[float] = [float(b.strip()) for b in beta_str.split(',')]
@@ -112,8 +131,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--beta-true', '--T',
         type=parse_beta,
-        default='3.0,1.5',
-        help="true value of coefficents (default: 3.0,1.5)."
+        default='1.0,0.5,-1.5,3.0',
+        help="true value of coefficents (default: 1.0,0.5,-1.5,3.0)."
     )
     parser.add_argument(
         '--learning-rate', '--L',
