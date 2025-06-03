@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import argparse
-from typing import Tuple, List
+from pathlib import Path
 import time as t
+from typing import Tuple, List
+
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd  # type: ignore
@@ -12,6 +16,7 @@ from data import import_r_data
 from utils.evaluation_metrics import compute_ess, compute_esr
 from utils.select_learning_rate import SelectLearningRate
 from utils.pl_score_hessian import cox_score_and_hess
+from utils.plot_figure import PlotActualResult
 
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
@@ -132,7 +137,8 @@ if __name__ == '__main__':
     df4cox['event'] = event
     cph = CoxPHFitter()
     cph.fit(df4cox, duration_col='time', event_col='event')
-    print("\nEstimated coefficients by normal cox:", np.array(cph.params_))
+    cph_mple: NDArray = np.array(cph.params_)
+    print("\nEstimated coefficients by normal cox:", cph_mple)
 
     lr: float = args.learning_rate
     if lr == 0:
@@ -185,8 +191,25 @@ if __name__ == '__main__':
     start = t.time()
     cmh_h_samples = cmh.cox_mh_with_hessian_sample(time, event, n_iter=args.iteration, lr=lr_MH)
     end = t.time()
-    cmh_h_burn_in: np.ndarray = cmh_h_samples[args.burn_in:]
+    cmh_h_burn_in: NDArray = cmh_h_samples[args.burn_in:]
     print(f'\nEstimated coefficients by Cox-MH: {cmh_h_burn_in.mean(axis=0)}')
     print(f'executing time: {end - start:.2f}')
     print(f'compute ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
     print(f'compute esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
+
+    # plot some figures
+    if args.ablation_correction:
+        par = PlotActualResult(
+            n_iter=args.iteration,
+            mh_samples=cmh_h_samples,
+            gs4c_samples=gs4c_samples,
+            gs4c_samples_corrected=gs4c_samples_corrected,
+            cph_mpl_estimates=cph_mple,
+            savefig_root=Path('../fig'),
+            cph_mpl_lower=np.array(cph.confidence_intervals_['95% lower-bound']),
+            cph_mpl_upper=np.array(cph.confidence_intervals_['95% upper-bound']),
+        )
+        par.pict_trace_plot(colnames=args.covariates_column_names)
+        par.pict_post_dist(colnames=args.covariates_column_names, burn_in=args.burn_in)
+        par.pict_correlogram(colnames=args.covariates_column_names, empty_ax=True)
+        par.pict_forestplot(colnames=args.covariates_column_names, burn_in=args.burn_in)
