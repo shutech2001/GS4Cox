@@ -512,7 +512,7 @@ class PlotActualResult(PlotResult):
         ax.grid(axis='x', linestyle=':', linewidth=0.5)
 
         fig.legend(
-            methods, 
+            methods,
             fontsize=20,
             bbox_to_anchor=(0.5, 1.1),
             ncol=2,
