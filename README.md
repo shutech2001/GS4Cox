@@ -77,6 +77,8 @@ poetry env info --path
 
 - src/utils/evaluation_metrics.py
   - functions for evaluating MCMC performance
+- src/utils/plot_figure.py
+  - class for plotting figure
 - src/utils/pl_score_hessian.py
   - functions for calculating score and Hessian for ablation study
 - src/utils/select_learning_rate.py
