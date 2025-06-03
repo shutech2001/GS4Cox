@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import time as t
 from typing import Tuple, List
+import warnings
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,6 +19,7 @@ from utils.select_learning_rate import SelectLearningRate
 from utils.pl_score_hessian import cox_score_and_hess
 from utils.plot_figure import PlotActualResult
 
+warnings.filterwarnings('ignore')
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
 
