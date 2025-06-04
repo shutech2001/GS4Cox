@@ -1,6 +1,6 @@
 # GS4Cox
 
-Materials for **"Efficient Gibbs Sampling in Cox Regression Models Using Composite Partial Likelihood and P´olya-Gamma Augmentation"**.
+Materials for "[**Efficient Gibbs Sampling in Cox Regression Models Using Composite Partial Likelihood and P´olya-Gamma Augmentation**](https://arxiv.org/abs/2506.XXXXX)".
 
 ## What is this repo?
 
@@ -67,6 +67,7 @@ poetry env info --path
 ### File Description
 - src/cox_sampler.py
   - `GS4Cox`
+    - __This class constitutes our main contribution.__
     - Gibbs Sampler for the Cox regression based on four key components Class
       - general Bayesian framework
       - composite partial likelihood
@@ -91,4 +92,14 @@ poetry env info --path
 
 ## Citation
 ```
+@article{tamano2025efficient,
+    author={Tamano, Shu and Tomo, Yui},
+    title={Efficient Gibbs Sampling in {Cox} Regression Models Using Composite Partial Likelihood and {P\'olya-Gamma} Augmentation},
+    journal={arXiv preprint arXiv:2506.NNNNN},
+    year={2025},
+}
 ```
+
+## Contact
+
+If you have any question, please feel free to contact: stamano@niid.go.jp
