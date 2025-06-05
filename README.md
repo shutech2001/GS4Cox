@@ -1,6 +1,6 @@
 # GS4Cox
 
-Materials for "[**Efficient Gibbs Sampling in Cox Regression Models Using Composite Partial Likelihood and P´olya-Gamma Augmentation**](https://arxiv.org/abs/2506.XXXXX)".
+Materials for "[**Efficient Gibbs Sampling in Cox Regression Models Using Composite Partial Likelihood and P´olya-Gamma Augmentation**](https://arxiv.org/abs/2506.NNNNN)".
 
 ## What is this repo?
 
@@ -94,8 +94,8 @@ poetry env info --path
 ```
 @article{tamano2025efficient,
     author={Tamano, Shu and Tomo, Yui},
-    title={Efficient Gibbs Sampling in {Cox} Regression Models Using Composite Partial Likelihood and {P\'olya-Gamma} Augmentation},
     journal={arXiv preprint arXiv:2506.NNNNN},
+    title={Efficient {Gibbs} Sampling in {Cox} Regression Models Using Composite Partial Likelihood and {P\'olya-Gamma} Augmentation},
     year={2025},
 }
 ```
