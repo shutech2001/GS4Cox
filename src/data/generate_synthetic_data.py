@@ -6,7 +6,7 @@ from typing import Tuple
 from numpy.typing import NDArray
 
 
-class SyntheticDataGenerater4CoxReg:
+class SyntheticDataGenerator4CoxReg:
     def __init__(self, n: int, beta_true: NDArray, seed: int = 42) -> None:
         """
         Args:

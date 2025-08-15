@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 import pandas as pd  # type: ignore
 
 from cox_sampler import GS4Cox, CoxMHSampler
-from data import SyntheticDataGenerater4CoxReg
+from data import SyntheticDataGenerator4CoxReg
 from utils.evaluation_metrics import compute_esr, compute_ess
 from utils.pl_score_hessian import cox_score_and_hess
 from utils.plot_figure import PlotSyntheticResult
@@ -31,12 +31,12 @@ def run_simulation(
     rounding: float,
     ablation_correction: bool = False,
 ) -> None:
-    data_generater = SyntheticDataGenerater4CoxReg(n=n, beta_true=beta_true)
+    data_generator = SyntheticDataGenerator4CoxReg(n=n, beta_true=beta_true)
 
     if use_ties:
-        covariates, time, event = data_generater.simulate_cox_data_ties(rounding=rounding)
+        covariates, time, event = data_generator.simulate_cox_data_ties(rounding=rounding)
     else:
-        covariates, time, event = data_generater.simulate_cox_data()
+        covariates, time, event = data_generator.simulate_cox_data()
 
     # Estimate by GS4Cox
     if ablation_correction:
@@ -132,7 +132,7 @@ if __name__ == '__main__':
         '--beta-true', '--T',
         type=parse_beta,
         default='1.0,0.5,-1.5,3.0',
-        help="true value of coefficents (default: 1.0,0.5,-1.5,3.0)."
+        help="true value of coefficients (default: 1.0,0.5,-1.5,3.0)."
     )
     parser.add_argument(
         '--learning-rate', '--L',
