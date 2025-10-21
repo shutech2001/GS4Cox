@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections import deque
 import cvxpy as cp
-from typing import Optional, Tuple, Dict, Deque
+import random
+from typing import Deque, Dict, Optional, Tuple
 import warnings
 
 import numpy as np
@@ -21,17 +22,38 @@ numpy2ri.activate()
 
 
 class CoxSampler:
-    """Parent Class of Cox MH/Gibbs Sampler"""
+    """Parent Class of Cox Sampler"""
 
-    def __init__(self, covariates: NDArray):
+    @classmethod
+    def set_global_seeds(cls, seed: int = 2025) -> None:
+        """Set global seeds
+
+        Args:
+            seed (int): seed
+        """
+
+        # global RNG (Python/NumPy)
+        random.seed(seed)
+        np.random.seed(seed)
+
+        # global RNG (rpy2)
+        try:
+            ro.r('RNGkind(kind = "L\'Ecuyer-CMRG")')
+            ro.r(f"set.seed({seed})")
+        except Exception:
+            pass  # R not initialized
+
+    def __init__(self, covariates: NDArray, random_state: int = 2025):
         """
         Args:
-            covariates (NDArray)
+            covariates (NDArray): covariates
+            random_state (int): random state
         """
         self.covariates: NDArray = covariates
         self.data_num: int
         self.dim_covariates: int
         self.data_num, self.dim_covariates = covariates.shape
+        self.rng: np.random.Generator = np.random.default_rng(random_state)
 
     def build_risk_sets(self, time: NDArray, event: NDArray) -> Tuple[Dict[float, NDArray], NDArray, Deque[int]]:
         """ "Construct the risk set at each event occurrence time.
@@ -102,11 +124,137 @@ class GS4Cox(CoxSampler):
     - generalized Bayesian framework
     - composite partial likelihood
     - P\'olya-Gamma augmentation
-    - finite correction
+    - PL-target open-faced sandwich (center+shape)
     """
 
-    def __init__(self, covariates: NDArray) -> None:
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025) -> None:
+        super().__init__(covariates, random_state)
+
+    def _pl_score_hess(
+        self,
+        beta: NDArray,
+        time: NDArray,
+        event: NDArray,
+    ) -> Tuple[NDArray, NDArray]:
+        """Compute score and Hessian matrix of the partial log likelihood
+
+        Args:
+            beta (NDArray): parameters
+            time (NDArray): time of occurring event
+            event (NDArray): event flg (1: occurred)
+
+        Returns:
+            Tuple[NDArray, NDArray]: score and Hessian matrix
+        """
+        # sort by time ascending, then compute reverse cumulative sums (risk sets are suffixes)
+        order = np.argsort(time)
+        X = self.covariates[order]
+        t = time[order]
+        d = event[order].astype(int)
+
+        eta = X @ beta
+        e_eta = np.exp(eta)
+
+        # reverse cumulative sums over risk sets
+        S0 = np.cumsum(e_eta[::-1])[::-1]  # (n,)
+        S1 = np.cumsum((X * e_eta[:, None])[::-1], axis=0)[::-1]  # (n,d)
+        # second moment cumulative: sum e^eta * x x^T
+        XX = np.einsum("ni,nj->nij", X, X)
+        S2 = np.cumsum((XX * e_eta[:, None, None])[::-1], axis=0)[::-1]  # (n,d,d)
+
+        # unique event times (index of the first position of each unique event time)
+        mask_evt = d == 1
+        t_evt, inv = np.unique(t[mask_evt], return_inverse=True)
+        cnt_evt = np.bincount(inv)  # number of events at each unique time
+
+        first_pos = np.searchsorted(t, t_evt, side="left")  # index into cumulative arrays
+
+        # risk-set moments at each unique event time
+        S0_u = S0[first_pos]  # (u,)
+        S1_u = S1[first_pos]  # (u,d)
+        S2_u = S2[first_pos]  # (u,d,d)
+
+        # sum of x over tied events at each unique time
+        X_evt_sum = np.zeros((len(t_evt), self.dim_covariates))
+        for k, tt in enumerate(t_evt):
+            X_evt_sum[k] = X[(t == tt) & (d == 1)].sum(axis=0)
+
+        # score = \sum_t [ \sum_{events at t} x_i  - cnt(t) * (S1/S0) ]
+        score = X_evt_sum.sum(axis=0) - (cnt_evt[:, None] * (S1_u / S0_u[:, None])).sum(axis=0)
+
+        # bread (observed information): Q_PL_obs = \sum_t cnt(t) * (E_xx - E_x E_x^T)
+        E_x = S1_u / S0_u[:, None]  # (u,d)
+        E_xx = S2_u / S0_u[:, None, None]  # (u,d,d)
+        Hbread = np.zeros((self.dim_covariates, self.dim_covariates))
+        for k in range(len(t_evt)):
+            Hbread += cnt_evt[k] * (E_xx[k] - np.outer(E_x[k], E_x[k]))
+
+        return score, Hbread  # Hbread is positive definite (Q_PL_obs)
+
+    def _cpl_bread_from_pairs(
+        self,
+        beta: NDArray,
+        D: NDArray,
+        pairs_i: NDArray,
+        event: NDArray,
+    ) -> NDArray:
+        """Compute bread (observed information) of the composite partial likelihood
+
+        Args:
+            beta (NDArray): parameters
+            D (NDArray): stacked Δx matrix matching (pairs_i, pairs_j)
+            pairs_i (NDArray): event indices
+            event (NDArray): event flg (1: occurred)
+
+        Returns:
+            NDArray: bread (observed information)
+        """
+        if D.size == 0:
+            return np.eye(self.dim_covariates)
+
+        eta = D @ beta
+        # logistic with mild stabilization
+        p = 1.0 / (1.0 + np.exp(-eta))
+        w = p * (1.0 - p)
+        # event weight δ_i (should be 1 for all pairs here, but keep general for future extension)
+        wi = event[pairs_i].astype(float)
+        w *= wi
+        Q_cpl = D.T @ (w[:, None] * D)  # (d,d), symmetric psd
+        # symmetrize & ridge for numerical stability
+        Q_cpl = 0.5 * (Q_cpl + Q_cpl.T)
+        lam = 1e-10
+        Q_cpl += lam * np.eye(self.dim_covariates)
+        return Q_cpl
+
+    @staticmethod
+    def _sym_invsqrt(A: NDArray, eps: float = 1e-8) -> NDArray:
+        """Compute symmetric (inverse) square root of a matrix
+
+        Args:
+            A (NDArray): symmetric positive definite matrix
+            eps (float): epsilon
+
+        Returns:
+            NDArray: symmetric (inverse) square root of A
+        """
+        w, V = np.linalg.eigh(0.5 * (A + A.T))
+        w = np.clip(w, eps, None)
+        return (V / np.sqrt(w)) @ V.T
+
+    @staticmethod
+    def _sym_sqrt(A: NDArray, eps: float = 1e-8) -> NDArray:
+        """Compute symmetric square root of a matrix
+
+        Args:
+            A (NDArray): symmetric positive definite matrix
+            eps (float): epsilon
+
+        Returns:
+            NDArray: symmetric square root of A
+        """
+        w, V = np.linalg.eigh(0.5 * (A + A.T))
+        w = np.clip(w, eps, None)
+        return (V * np.sqrt(w)) @ V.T
 
     def _build_pairs(
         self,
@@ -114,20 +262,15 @@ class GS4Cox(CoxSampler):
         event_times: NDArray,
         event_nums: Deque[int],
     ) -> Tuple[NDArray, NDArray]:
-        """
-        Vectorized construction of all (i,j) pairs for the composite partial likelihood.
-        Returns arrays of event indices and risk-set indices.
+        """Vectorized construction of all (i,j) pairs for the composite partial likelihood
 
         Args:
-            Returns of `build_risk_sets`
-                - risk_sets (Dict[float, NDArray])
-                - event_times (NDArray)
-                - event_nums (Deque[int])
+            risk_sets (Dict[float, NDArray]): risk sets
+            event_times (NDArray): event times
+            event_nums (Deque[int]): event numbers
 
         Returns:
-            Tuple[NDArray, NDArray]:
-                - event indices
-                - risk-set indices
+            Tuple[NDArray, NDArray]: event indices and risk-set indices
         """
         pairs_i_deq: Deque[NDArray] = deque()
         pairs_j_deq: Deque[NDArray] = deque()
@@ -144,8 +287,8 @@ class GS4Cox(CoxSampler):
             pairs_i: NDArray = np.concatenate(pairs_i_deq)
             pairs_j: NDArray = np.concatenate(pairs_j_deq)
         else:
-            pairs_i = np.array([])
-            pairs_j = np.array([])
+            pairs_i = np.array([], dtype=int)
+            pairs_j = np.array([], dtype=int)
         return pairs_i, pairs_j
 
     def _loss_composite_partial_likelihood(
@@ -155,31 +298,92 @@ class GS4Cox(CoxSampler):
         event: NDArray,
         omega: NDArray,
     ) -> float:
-        """Compute log composite partial likelihood (or PG-augmented loss)
+        """Compute PG-augmented complete-data 'gain' (negative loss) of the composite partial likelihood
 
         Args:
             beta (NDArray): parameters
-            time (NDArray): observed time
-            event (NDArray): event indicator
-            omega (NDArray): PG auxiliary variables
+            time (NDArray): time of occurring event
+            event (NDArray): event flg (1: occurred)
+            omega (NDArray): PG-augmented complete-data 'gain' (negative loss)
 
         Returns:
-            float: value of log composite partial likelihood (or negative loss)
+            float: PG-augmented complete-data 'gain' (negative loss)
         """
         risk_sets, event_times, event_nums = self.build_risk_sets(time, event)
         pairs_i, pairs_j = self._build_pairs(risk_sets, event_times, event_nums)
-
         if len(pairs_i) == 0:
             return 0.0
-
-        # Compute pairwise differences
         D = self.covariates[pairs_i] - self.covariates[pairs_j]
         eta = D.dot(beta)
-
         kappa = 0.5
-        loss_cpl = np.sum(kappa * eta - (omega * eta**2) / 2)
+        return float(np.sum(kappa * eta - (omega * eta**2) / 2))
 
-        return loss_cpl
+    def _cpl_meat_from_pairs(
+        self,
+        beta: NDArray,
+        D: NDArray,
+        pairs_i: NDArray,
+        event: NDArray,
+    ) -> NDArray:
+        """Compute empirical meat of the composite partial likelihood
+
+        Args:
+            beta (NDArray): parameters
+            D (NDArray): stacked Δx matrix matching (pairs_i, pairs_j)
+            pairs_i (NDArray): event indices
+            event (NDArray): event flg (1: occurred)
+
+        Returns:
+            NDArray: empirical meat of the composite partial likelihood
+        """
+        d = self.dim_covariates
+        if D.size == 0:
+            return np.eye(d)
+        eta = D @ beta
+        p = 1.0 / (1.0 + np.exp(-eta))
+        r = 1.0 - p  # weights for U_i
+        Z = r[:, None] * D  # (P,d)
+        n = event.shape[0]
+        U = np.zeros((n, d))
+        # accumulate per event-anchor i
+        np.add.at(U, pairs_i, Z)
+        evt_mask = event == 1
+        Ue = U[evt_mask]
+        if Ue.shape[0] == 0:
+            return np.eye(d)
+        P_hat = (Ue.T @ Ue) / float(Ue.shape[0])
+        P_hat = 0.5 * (P_hat + P_hat.T) + 1e-10 * np.eye(d)
+        return P_hat
+
+    @staticmethod
+    def _cov_invsqrt(A: NDArray, eps: float = 1e-12) -> NDArray:
+        """Compute covariance inverse square root of a matrix
+
+        Args:
+            A (NDArray): covariance matrix
+            eps (float, optional): epsilon. Defaults to 1e-12.
+
+        Returns:
+            NDArray: covariance inverse square root of A
+        """
+        w, V = np.linalg.eigh(0.5 * (A + A.T))
+        w = np.clip(w, eps, None)
+        return (V / np.sqrt(w)) @ V.T
+
+    @staticmethod
+    def _cov_sqrt(A: NDArray, eps: float = 1e-12) -> NDArray:
+        """Compute covariance square root of a matrix
+
+        Args:
+            A (NDArray): covariance matrix
+            eps (float, optional): epsilon. Defaults to 1e-12.
+
+        Returns:
+            NDArray: covariance square root of A
+        """
+        w, V = np.linalg.eigh(0.5 * (A + A.T))
+        w = np.clip(w, eps, None)
+        return (V * np.sqrt(w)) @ V.T
 
     def sample(
         self,
@@ -190,29 +394,24 @@ class GS4Cox(CoxSampler):
         beta_init: Optional[NDArray] = None,
         prior_mean: Optional[NDArray] = None,
         prior_cov: Optional[NDArray] = None,
-        apply_correction: bool = True,
-        sample_lr: bool = False,
-        lr_prior_a: float = 1.0,
-        lr_prior_b: float = 10.0,
         trim_burn_in: bool = False,
         burn_in: int = 500,
     ) -> NDArray:
-        """Sampling via PG-augmented composite Cox Partial likelihood with vectorized updates.
+        """PG-augmented generalized Bayes under CPL, then PL-target OFS:
+          (i) center shift: \beta^\dagger = \beta + Q_PL(\beta)^{-1} S_PL(\beta)
+          (ii) shape map:   Ω = Q_PL(\beta^\dagger)^{-1/2} ( lr * Q_CPL(\beta^\dagger) )^{1/2}
+                           \beta \leftarrow \beta^\dagger + \Omega (\beta - \beta^\dagger)
 
         Args:
-            time (NDArray): observed time
-            event (NDArray): event indicator
-            n_iter (int): iteration of sampling. Defaults to 1000.
-            lr (float): learning rate in generalized Bayesian framework. Defaults to 1.0.
+            time (NDArray): time of occurring event
+            event (NDArray): event flg (1: occurred)
+            n_iter (int, optional): iteration. Defaults to 1000.
+            lr (float, optional): learning rate. Defaults to 1.0.
             beta_init (Optional[NDArray], optional): initial value of parameters. Defaults to None.
-            prior_mean (Optional[NDArray], optional): mean of prior normal distribution. Defaults to None.
-            prior_cov (Optional[NDArray], optional): covariance matrix of prior normal distribution. Defaults to None.
-            apply_correction (bool): apply finite-sample correction. Defaults to True.
-            sample_lr (bool): sample learning rate w. Defaults to False.
-            lr_prior_a (float): parameter of Gamma prior for learning rate. Defaults to 1.0.
-            lr_prior_b (float): parameter of Gamma prior for learning rate. Defaults to 10.0. (for ensuring lr_prior_b - loss_cpl > 0)  # noqa: E501
-            trim_burn_in (bool): trim burn-in. Defaults to False.
-            burn_in (int): burn-in period. Defaults to 500.
+            prior_mean (Optional[NDArray], optional): prior mean. Defaults to None.
+            prior_cov (Optional[NDArray], optional): prior covariance. Defaults to None.
+            trim_burn_in (bool, optional): trim burn-in. Defaults to False.
+            burn_in (int, optional): burn-in. Defaults to 500.
 
         Returns:
             NDArray: sampling result
@@ -224,101 +423,84 @@ class GS4Cox(CoxSampler):
         beta: NDArray = beta_init.copy() if beta_init is not None else np.zeros(self.dim_covariates)
         beta_samples: Deque[NDArray] = deque()
 
-        # Initialize learning rate samples storage
-        current_lr: float = lr if not sample_lr else np.random.gamma(lr_prior_a, 1.0 / lr_prior_b)
-
-        # risk set and pair pre-computation (only once)
+        # risk set and pair pre-computation
         risk_sets, event_times, event_nums = self.build_risk_sets(time, event)
         pairs_i, pairs_j = self._build_pairs(risk_sets, event_times, event_nums)
-        # delta matrix: shape (P, d)
-        D: NDArray = self.covariates[pairs_i] - self.covariates[pairs_j]
+        D: NDArray = self.covariates[pairs_i] - self.covariates[pairs_j]  # (P,d)
 
         for _ in range(n_iter):
             # vectorized dot products
-            psi: NDArray = D.dot(beta)
+            psi: NDArray = D.dot(beta) if D.size else np.zeros(0)
             # PG sampling
-            omega: NDArray = random_polyagamma(1, psi)
+            omega: NDArray
+            omega = random_polyagamma(1, psi, random_state=self.rng) if psi.size else np.zeros(0)
             kappa: float = 0.5
 
-            # Sample learning rate w if requested
-            if sample_lr:
-                # Compute log composite partial likelihood
-                loss_cpl = self._loss_composite_partial_likelihood(beta, time, event, omega)
-                # Sample w from Gamma(a, b - log_cpl)
-                # ensure lr_prior_b - loss_cpl > 0
-                gamma_rate = max(1e-6, lr_prior_b - loss_cpl)
-                current_lr = np.random.gamma(lr_prior_a, 1 / gamma_rate)
+            # compute weighted covariance and mean for Gaussian conditional of β
+            if D.size:
+                W: NDArray = omega[:, None]
+                add_cov: NDArray = D.T.dot(D * W)  # Σ δ ω ΔxΔx^T
+                add_mean: NDArray = kappa * D.sum(axis=0)  # Σ κ Δx
+            else:
+                add_cov = np.zeros((self.dim_covariates, self.dim_covariates))
+                add_mean = np.zeros(self.dim_covariates)
 
-            # compute weighted covariance and mean
-            W: NDArray = omega[:, None]
-            add_cov: NDArray = D.T.dot(D * W)
-            add_mean: NDArray = kappa * D.sum(axis=0)
-
-            # posterior precision
-            post_prec: NDArray = inv_cov0 + current_lr * add_cov
+            # posterior precision and mean
+            post_prec: NDArray = inv_cov0 + lr * add_cov
             c, lower = cho_factor(post_prec, check_finite=False)
             post_cov = cho_solve((c, lower), np.eye(self.dim_covariates), check_finite=False)
-            rhs: NDArray
-            rhs = inv_cov0.dot(mean0) + current_lr * add_mean
+            rhs: NDArray = inv_cov0.dot(mean0) + lr * add_mean
             post_mean: NDArray = cho_solve((c, lower), rhs, check_finite=False)
 
             # sample new beta
-            beta = np.random.multivariate_normal(post_mean, post_cov)
+            beta = self.rng.multivariate_normal(post_mean, post_cov)
             beta_samples.append(beta)
 
-        if apply_correction:
-            beta_burn_in = np.vstack(beta_samples)[burn_in:].mean(axis=0)
-            idx = np.argsort(-time)
-            X = self.covariates[idx]
-            d = event[idx]
+        beta_samples_array = np.vstack(beta_samples)
 
-            eta = X @ beta_burn_in
-            e_eta = np.exp(eta)
+        # common: posterior mean and empirical covariance (current posterior)
+        beta_bar = (
+            beta_samples_array[burn_in:].mean(axis=0)
+            if beta_samples_array.shape[0] > burn_in
+            else beta_samples_array.mean(axis=0)
+        )
+        beta_post_samples = beta_samples_array[burn_in:]
+        Sigma_curr = np.cov(beta_post_samples.T, ddof=1)
 
-            # cumulative sums over risk sets
-            cum_e_eta = np.cumsum(e_eta)
-            cum_Xe = np.cumsum((X * e_eta[:, None]), axis=0)
-            # cumulative second moment \sum \exp(\eta) x x^\top - compute via outer products
-            cum_S2 = np.zeros((self.data_num, self.dim_covariates, self.dim_covariates))
-            outer = np.einsum("ni,nj->nij", X, X)
-            cum_S2[0] = e_eta[0] * outer[0]
-            for k in range(1, self.data_num):
-                cum_S2[k] = cum_S2[k - 1] + e_eta[k] * outer[k]
-
-            score = np.zeros(self.dim_covariates)
-            hess = np.zeros((self.dim_covariates, self.dim_covariates))
-
-            for k in range(self.data_num):
-                if d[k] == 0:
-                    continue
-                S0 = cum_e_eta[k]
-                S1 = cum_Xe[k]
-                S2 = cum_S2[k]
-                weight = 1.0 / S0
-                mean = S1 * weight
-                score += X[k] - mean
-                hess += (S2 / S0) - np.outer(mean, mean)
-
-            correction = np.linalg.solve(hess, score)
-            beta_samples_array = np.vstack(beta_samples)
-            beta_samples_array = beta_samples_array + correction
-
-            if trim_burn_in:
-                return beta_samples_array[burn_in:]
-
+        # use previously created pairs/D
+        # if pairs is empty (no events), return immediately
+        if D.size == 0:
             return beta_samples_array
+        # first compute beta_dagger
+        score_pl, Q_pl = self._pl_score_hess(beta_bar, time, event)
+        beta_dagger = beta_bar + np.linalg.solve(Q_pl, score_pl)
+
+        # target covariance (PL)
+        Q_pl_at = self._pl_score_hess(beta_dagger, time, event)[1]
+        Sigma_target = np.linalg.inv(Q_pl_at)
+
+        # current posterior covariance (computed only from post-burn samples)
+        beta_post = beta_samples_array[burn_in:]
+        Sigma_curr = np.cov(beta_post.T, ddof=1)
+
+        # compute Omega as "target^{1/2} × curr^{-1/2}" (symmetric square root)
+        Omega = self._sym_sqrt(Sigma_target, eps=1e-10) @ self._sym_invsqrt(Sigma_curr, eps=1e-10)
+
+        # apply transformation only to post-burn samples (important: do not include burn-in)
+        centered_post = beta_samples_array - beta_post.mean(axis=0)
+        beta_pl_ofs_post = beta_dagger[None, :] + centered_post @ Omega.T
 
         if trim_burn_in:
-            return np.vstack(beta_samples)[burn_in:]
+            return beta_pl_ofs_post[burn_in:]  # trim burn-in
 
-        return np.vstack(beta_samples)
+        return beta_pl_ofs_post  # return all samples
 
 
 class CoxMHSampler(CoxSampler):
     """Class of Metropolis-Hastings sampler for Cox regression model in general Bayesian framework"""
 
-    def __init__(self, covariates: NDArray) -> None:
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025) -> None:
+        super().__init__(covariates, random_state)
 
     def log_pl_posterior(
         self, beta: NDArray, time: NDArray, event: NDArray, lr: float = 1.0, cov0: float = 10.0
@@ -453,14 +635,14 @@ class CoxMHSampler(CoxSampler):
                 # check for positive definite
                 np.linalg.cholesky(cov_prop)
                 # MH step
-                beta_prop = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
+                beta_prop = beta + self.rng.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
             except np.linalg.LinAlgError:
                 cov_prop = scaling * np.eye(self.dim_covariates) * 0.1
                 # MH step
-                beta_prop = beta + np.random.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
+                beta_prop = beta + self.rng.multivariate_normal(np.zeros(self.dim_covariates), cov_prop)
 
             lp_prop = self.log_partial_likelihood(beta_prop, time, event) * lr - 0.5 * np.sum(beta_prop**2) / (cov0**2)
-            if np.log(np.random.rand()) < (lp_prop - lp_post):
+            if np.log(self.rng.random()) < (lp_prop - lp_post):
                 beta, lp_post = beta_prop, lp_prop
                 accept += 1
 
@@ -481,8 +663,8 @@ class CoxPGSampler(CoxSampler):
         Benny Ren, Jeffrey S Morris, Ian Barnett, The Cox-P\'olya-Gamma algorithm for flexible Bayesian inference of multilevel survival models, Biometrics, Volume 81, Issue 3, September 2025, ujaf121, doi: 10.1093/biomtc/ujaf121  # noqa: E501
     """
 
-    def __init__(self, covariates: NDArray):
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025):
+        super().__init__(covariates, random_state)
 
         # Import only essential R packages
         utils = importr("utils")
@@ -954,7 +1136,7 @@ class CoxPGSampler(CoxSampler):
             # Step 1: Sample slice variables
             v_max = np.zeros(J)
             for j in range(J):
-                v_tmp = beta_dist.rvs(nj[j], 1)
+                v_tmp = beta_dist.rvs(nj[j], 1, random_state=self.rng)
                 v_tmp = max(0.0, v_tmp)
                 v_max[j] = v_tmp * eta[j]
 
@@ -994,19 +1176,19 @@ class CoxPGSampler(CoxSampler):
 
             try:
                 L = np.linalg.cholesky(cond_cov2)
-                eta_other = cond_mean2 + L @ np.random.randn(len(cond_mean2))
+                eta_other = cond_mean2 + L @ self.rng.standard_normal(len(cond_mean2))
             except Exception as e:
                 print(f"Error in cholesky: {e}")
                 cond_cov2 += np.eye(cond_cov2.shape[0]) * 1e-8
                 L = np.linalg.cholesky(cond_cov2)
-                eta_other = cond_mean2 + L @ np.random.randn(len(cond_mean2))
+                eta_other = cond_mean2 + L @ self.rng.standard_normal(len(cond_mean2))
 
             eta_new = np.concatenate([eta_spline, eta_other])
 
             # Step 5: MH calibration
             if calibration:
                 log_acc_prob = self._log_mh_prob(eta_new, eta, event, M, epsilon, weights)
-                if np.log(np.random.rand()) < log_acc_prob:
+                if np.log(self.rng.random()) < log_acc_prob:
                     eta = eta_new
                     accept += 1
             else:
@@ -1027,7 +1209,9 @@ class CoxPGSampler(CoxSampler):
                 for i, M_dim in enumerate(MM_vec):
                     eta_mixed = eta[P + MM_counter : P + MM_counter + M_dim]  # noqa: E203
                     tau_vec[i] = gamma_dist.rvs(
-                        a=tau_prior_a + M_dim / 2, scale=1.0 / (tau_prior_b + np.sum(eta_mixed**2) / 2)
+                        a=tau_prior_a + M_dim / 2,
+                        scale=1.0 / (tau_prior_b + np.sum(eta_mixed**2) / 2),
+                        random_state=self.rng,
                     )
                     # update diagonal elements
                     for j in range(M_dim):
@@ -1052,8 +1236,8 @@ class CoxPGSampler(CoxSampler):
 class CoxHMCSampler(CoxSampler):
     """Hamiltonian Monte Carlo sampler for Cox regression model with generalized Bayesian framework"""
 
-    def __init__(self, covariates: NDArray) -> None:
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025) -> None:
+        super().__init__(covariates, random_state)
 
     def compute_gradient(self, beta: NDArray, time: NDArray, event: NDArray, lr: float, cov0: float) -> NDArray:
         """Compute gradient of log posterior
@@ -1193,7 +1377,7 @@ class CoxHMCSampler(CoxSampler):
         inv_cov0_sq = 1.0 / (cov0**2)
 
         for _ in range(n_iter):
-            momentum = np.random.randn(self.dim_covariates)
+            momentum = self.rng.standard_normal(self.dim_covariates)
 
             # Current state
             current_log_prob = self.log_partial_likelihood(beta, time, event) * lr - 0.5 * np.sum(beta**2) * inv_cov0_sq
@@ -1211,7 +1395,7 @@ class CoxHMCSampler(CoxSampler):
             # Metropolis acceptance
             log_accept = (prop_log_prob - prop_kinetic) - (current_log_prob - current_kinetic)
 
-            if np.log(np.random.rand()) < log_accept:
+            if np.log(self.rng.random()) < log_accept:
                 beta = beta_prop
                 accept += 1
 
@@ -1229,8 +1413,8 @@ class CoxHMCSampler(CoxSampler):
 class CoxNUTSSampler(CoxSampler):
     """No-U-Turn Sampler for Cox regression with generalized Bayesian framework"""
 
-    def __init__(self, covariates: NDArray):
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025):
+        super().__init__(covariates, random_state)
 
     def compute_gradient(self, beta: NDArray, time: NDArray, event: NDArray, lr: float, cov0: float) -> NDArray:
         """Compute gradient of log posterior
@@ -1386,7 +1570,7 @@ class CoxNUTSSampler(CoxSampler):
 
                 if n_dprime > 0:
                     accept_prob = n_dprime / max(1, n_prime + n_dprime)
-                    if np.random.rand() < accept_prob:
+                    if self.rng.random() < accept_prob:
                         beta_prime = beta_dprime
 
                 delta = beta_p - beta_m
@@ -1451,14 +1635,14 @@ class CoxNUTSSampler(CoxSampler):
             kappa = 0.75
 
         for iter_num in range(n_iter):
-            momentum = np.random.randn(self.dim_covariates)
+            momentum = self.rng.standard_normal(self.dim_covariates)
 
             log_prob = self.log_partial_likelihood(beta, time, event) * lr - 0.5 * np.sum(beta**2) / (cov0**2)
             kinetic = 0.5 * np.sum(momentum**2)
             log_joint = log_prob - kinetic
             log_joint0 = log_joint
 
-            log_u = log_joint - np.random.exponential(1.0)
+            log_u = log_joint - self.rng.exponential(1.0)
 
             beta_m = beta.copy()
             beta_p = beta.copy()
@@ -1472,7 +1656,7 @@ class CoxNUTSSampler(CoxSampler):
             beta_old = beta.copy()
 
             while s == 1 and j < max_depth:
-                v = 2 * np.random.randint(2) - 1
+                v = 2 * self.rng.integers(2) - 1
 
                 if v == -1:
                     (beta_m, momentum_m, _, _, beta_prime, n_prime, s_prime, alpha_sum, n_alpha) = self.build_tree(
@@ -1485,7 +1669,7 @@ class CoxNUTSSampler(CoxSampler):
 
                 if s_prime == 1:
                     accept_prob = n_prime / (n + n_prime)
-                    if np.random.rand() < accept_prob:
+                    if self.rng.random() < accept_prob:
                         beta_new = beta_prime
 
                 n += n_prime
@@ -1539,8 +1723,8 @@ class CoxNUTSSampler(CoxSampler):
 class CoxMALASampler(CoxSampler):
     """Metropolis-Adjusted Langevin Algorithm for Cox regression with generalized Bayesian framework"""
 
-    def __init__(self, covariates: NDArray):
-        super().__init__(covariates)
+    def __init__(self, covariates: NDArray, random_state: int = 2025):
+        super().__init__(covariates, random_state)
 
     def compute_gradient(self, beta: NDArray, time: NDArray, event: NDArray, lr: float, cov0: float) -> NDArray:
         """Compute gradient of log posterior
@@ -1583,7 +1767,7 @@ class CoxMALASampler(CoxSampler):
         grad = lr * grad_like + grad_prior
         return grad
 
-    def mala_sample(
+    def sample(
         self,
         time: NDArray,
         event: NDArray,
@@ -1629,7 +1813,7 @@ class CoxMALASampler(CoxSampler):
             grad_current = self.compute_gradient(beta, time, event, lr, cov0)
 
             # Propose new state
-            beta_prop = beta + half_step * grad_current + sqrt_step * np.random.randn(self.dim_covariates)
+            beta_prop = beta + half_step * grad_current + sqrt_step * self.rng.standard_normal(self.dim_covariates)
 
             grad_prop = self.compute_gradient(beta_prop, time, event, lr, cov0)
 
@@ -1649,7 +1833,7 @@ class CoxMALASampler(CoxSampler):
             # Metropolis-Hastings acceptance
             log_accept = (log_prob_prop + log_q_backward) - (log_prob_current + log_q_forward)
 
-            if np.log(np.random.rand()) < log_accept:
+            if np.log(self.rng.random()) < log_accept:
                 beta = beta_prop
                 accept += 1
 
