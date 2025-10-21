@@ -25,9 +25,9 @@ poetry env info --path
 ### executing simulation
 - `python src/synthetic_data_experiment.py`
   - `--data-size` | `--N`
-    - sample size (default: `100`).
+    - sample size (default: `300`).
   - `--beta-true` | `--T`
-    - true value of coefficents (default: `'1.0,0.5'`).
+    - true value of coefficents (default: `'1.0,-1.0,0.5,-0.5,0.3,-0.3,0.1,-0.1'`).
   - `--learning-rate` | `--L`
     - learning rate for general Bayesian framework (default: `1.0`).
   - `--iteration` | `--I`
@@ -38,8 +38,12 @@ poetry env info --path
     - set to `True` when performing simulation based on the same event occurrence data (default: `False`).
   - `--rounding` | `--R`
     - rounding unit for generating tie data (default: `0.001`).
-  - `--ablation-correction` | `--A`
-    - set to `True` when comparing results with and without finite-sample corrections (default: `False`).
+  - `--calc-intervals` | `--CI`
+    - set to `True` when calculating 95% confidence/credible intervals of estimated coefficients (default: `True`).
+  - `--plot-results` | `--P`
+    - set to `True` when plotting trace plots, correlograms and forest plots (default: `False`).
+  - `--savefig-root` | `--S`
+    - root directory for saving figures (default: `figures`).
 
 - `python src/actual_data_experiment.py`
   - `--package` | `--P`
@@ -61,29 +65,40 @@ poetry env info --path
   - `--learning-rate` | `--L`
     - learning rate for general Bayesian framework (default: `1.0`).
     - If set to `0`, execute learning rate selection by GPC (proposed by Syring and Martin, 2019).
-  - `--ablation-correction` | `--A`
-    - set to `True` when comparing results with and without finite-sample corrections (default: `False`).
+  - `--calc-intervals` | `--CI`
+    - set to `True` when calculating 95% confidence/credible intervals of estimated coefficients (default: `True`).
+  - `--plot-results` | `--P`
+    - set to `True` when plotting trace plots, correlograms and forest plots (default: `False`).
+  - `--savefig-root` | `--S`
+    - root directory for saving figures (default: `figures`).
 
 ### File Description
 - src/cox_sampler.py
+  - `CoxSampler`
+    - Parent class of MCMC sampler for Cox regression models
   - `GS4Cox`
     - __This class constitutes our main contribution.__
-    - Gibbs Sampler for the Cox regression based on four key components Class
+    - Gibbs Sampler for the Cox regression based on four key components class
       - general Bayesian framework
       - composite partial likelihood
       - P'olya-Gamma augmentation scheme
-      - finite correction
+      - open-faced sandwich
   - `CoxMHSampler`
-    - Metropolis sampler for Cox regression in general Bayesian framework Class
+    - Metropolis sampler for Cox regression in general Bayesian framework class
+  - `CoxPGSampler`
+    - Cox-P'olya-Gamma algorithm class
+    - Original citation: Benny Ren, Jeffrey S Morris, Ian Barnett, The Cox-P\'olya-Gamma algorithm for flexible Bayesian inference of multilevel survival models, Biometrics, Volume 81, Issue 3, September 2025, ujaf121, doi: 10.1093/biomtc/ujaf121
+  - `CoxHMCSampler`
+    - Hamiltonian Monte Carlo sampler for Cox regression in general Bayesian framework class
+  - `CoxNUTSsampler`
+    - No-U-Turn sampler for Cox regression in general Bayesian framework class
+  - `CoxMALASampler`
+    - Metropolis-Adjusted Langevin algorithm sampler for Cox regression in general Bayesian framework class
 
 - src/utils/evaluation_metrics.py
   - functions for evaluating MCMC performance
-- src/utils/plot_figure.py
-  - class for plotting figure
-- src/utils/pl_score_hessian.py
-  - functions for calculating score and Hessian for ablation study
-- src/utils/select_learning_rate.py
-  - class for selecting learning rate of general Bayesian inference
+- src/utils/plot.py
+  - functions for plotting figure
 
 - src/data/generate_synthetic_data.py
   - class for generating synthetic data for Cox regression Class
