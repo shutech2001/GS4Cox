@@ -398,9 +398,9 @@ class GS4Cox(CoxSampler):
         burn_in: int = 500,
     ) -> NDArray:
         """PG-augmented generalized Bayes under CPL, then PL-target OFS:
-          (i) center shift: \beta^\dagger = \beta + Q_PL(\beta)^{-1} S_PL(\beta)
-          (ii) shape map:   Ω = Q_PL(\beta^\dagger)^{-1/2} ( lr * Q_CPL(\beta^\dagger) )^{1/2}
-                           \beta \leftarrow \beta^\dagger + \Omega (\beta - \beta^\dagger)
+          (i) center shift: beta_dagger = beta + Q_PL(beta)^{-1} S_PL(beta)
+          (ii) shape map: Omega = Q_PL(beta_dagger)^{-1/2} ( lr * Q_CPL(beta_dagger) )^{1/2}
+                           beta_{pl-ofs} left_arrow beta_dagger + Omega (beta - beta_dagger)
 
         Args:
             time (NDArray): time of occurring event
