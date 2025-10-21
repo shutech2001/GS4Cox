@@ -1410,7 +1410,7 @@ class CoxHMCSampler(CoxSampler):
         return np.array(beta_samples)
 
 
-class CoxNUTSSampler(CoxSampler):
+class CoxNUTSampler(CoxSampler):
     """No-U-Turn Sampler for Cox regression with generalized Bayesian framework"""
 
     def __init__(self, covariates: NDArray, random_state: int = 2025):
