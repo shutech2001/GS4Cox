@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import time as t
 import warnings
 
@@ -9,9 +10,10 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd  # type: ignore
 
-from cox_sampler import CoxSampler, GS4Cox, CoxMHSampler, CoxHMCSampler, CoxNUTSSampler, CoxMALASampler, CoxPGSampler
+from cox_sampler import CoxSampler, GS4Cox, CoxMHSampler, CoxHMCSampler, CoxNUTSampler, CoxMALASampler, CoxPGSampler
 from data import SyntheticDataGenerator4CoxReg
 from utils.evaluation_metrics import compute_esr, compute_ess, compute_mcse
+from utils.plot import plot_trace, plot_correlogram, plot_forestplot
 
 warnings.filterwarnings("ignore")
 # global setting for output
@@ -27,6 +29,8 @@ def run_simulation(
     use_ties: bool,
     rounding: float,
     calc_intervals: bool,
+    plot_results: bool,
+    savefig_root: Path,
 ) -> None:
     data_generator = SyntheticDataGenerator4CoxReg(n=n, beta_true=beta_true)
 
@@ -108,7 +112,7 @@ def run_simulation(
             print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
 
     # No-U-Turn Sampler
-    nuts = CoxNUTSSampler(covariates=covariates)
+    nuts = CoxNUTSampler(covariates=covariates)
     start = t.time()
     nuts_samples = nuts.sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
@@ -143,7 +147,7 @@ def run_simulation(
             print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
 
     # Cox-P\'olya-Gamma algorithm proposed by Ren et al. (2025)
-    cpg = CoxPGSampler(covariates=covariates)
+    cpg = CoxPGSampler(covariates=covariates, random_state=42)
     start = t.time()
     cpg_samples = cpg.sample(time=time, event=event, n_iter=n_iter, calibration=True)
     end = t.time()
@@ -158,6 +162,48 @@ def run_simulation(
         cpg_upper: NDArray = np.quantile(cpg_burn_in, upper_bound, axis=0)
         for i, (low, up) in enumerate(zip(cpg_lower, cpg_upper)):
             print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    if plot_results:
+        plot_trace(
+            param_idx=0,
+            n_iter=n_iter,
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            true_values=beta_true,
+            mple_estimates=cph_mple,
+            savefig_root=savefig_root,
+            file_name=Path("num_trace_plot_beta1.png"),
+        )
+        plot_correlogram(
+            param_idx=0,
+            n_iter=n_iter,
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            savefig_root=savefig_root,
+            file_name=Path("num_correlogram_beta1.png"),
+        )
+        if calc_intervals:
+            plot_forestplot(
+                samples=[gs4_samples, mh_samples, hmc_samples, nuts_samples, mala_samples, cpg_samples],
+                burn_in=burn_in,
+                mple_estimates=cph_mple,
+                mple_lower=cph_mple_lower,
+                mple_upper=cph_mple_upper,
+                savefig_root=savefig_root,
+                file_name=Path("num_forestplot_beta1.png"),
+            )
 
 
 def parse_beta(beta_str: str) -> NDArray:
@@ -216,6 +262,20 @@ if __name__ == "__main__":
         default=True,
         help="set to `True` when calculating 95% confidence/credible intervals of estimated coefficients (default: True).",  # noqa: E501
     )
+    parser.add_argument(
+        "--plot-results",
+        "--P",
+        type=bool,
+        default=False,
+        help="set to `True` when plotting trace plots, correlograms and forest plots (default: False).",
+    )
+    parser.add_argument(
+        "--savefig-root",
+        "--S",
+        type=str,
+        default="figures",
+        help="root directory for saving figures (default: 'figures').",
+    )
     args = parser.parse_args()
 
     run_simulation(
@@ -227,4 +287,6 @@ if __name__ == "__main__":
         use_ties=args.use_ties,
         rounding=args.rounding,
         calc_intervals=args.calc_intervals,
+        plot_results=args.plot_results,
+        savefig_root=Path(args.savefig_root),
     )

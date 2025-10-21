@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import time as t
+from pathlib import Path
 from typing import Tuple
 import warnings
 
@@ -12,9 +13,10 @@ from sklearn.preprocessing import StandardScaler  # type: ignore
 
 from lifelines import CoxPHFitter  # type: ignore
 
-from cox_sampler import CoxSampler, GS4Cox, CoxMHSampler, CoxHMCSampler, CoxNUTSSampler, CoxMALASampler, CoxPGSampler
+from cox_sampler import CoxSampler, GS4Cox, CoxMHSampler, CoxHMCSampler, CoxNUTSampler, CoxMALASampler, CoxPGSampler
 from data import import_r_data
 from utils.evaluation_metrics import compute_ess, compute_esr, compute_mcse
+from utils.plot import plot_trace, plot_correlogram, plot_forestplot
 
 warnings.filterwarnings("ignore")
 # global setting for output
@@ -107,6 +109,20 @@ if __name__ == "__main__":
         default=True,
         help="set to `True` when calculating 95% confidence/credible intervals of estimated coefficients (default: True).",  # noqa: E501
     )
+    parser.add_argument(
+        "--plot-results",
+        "--P",
+        type=bool,
+        default=False,
+        help="set to `True` when plotting results (default: False).",
+    )
+    parser.add_argument(
+        "--savefig-root",
+        "--S",
+        type=str,
+        default="figures",
+        help="root directory for saving figures (default: 'figures').",
+    )
     args = parser.parse_args()
 
     # calculate lower and upper bounds of confidence interval
@@ -119,7 +135,8 @@ if __name__ == "__main__":
     burn_in: int = args.burn_in
     learning_rate: float = args.learning_rate
     calc_intervals: bool = args.calc_intervals
-
+    plot_results: bool = args.plot_results
+    savefig_root: Path = Path(args.savefig_root)
     # import data
     _df: pd.DataFrame = import_r_data(dataset_name=args.dataset, package_name=args.package)
     df = _df.dropna().copy()
@@ -206,7 +223,7 @@ if __name__ == "__main__":
             print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
 
     # No-U-Turn Sampler
-    nuts = CoxNUTSSampler(covariates=covariates)
+    nuts = CoxNUTSampler(covariates=covariates)
     start = t.time()
     nuts_samples = nuts.sample(time, event, n_iter=n_iter, lr=learning_rate)
     end = t.time()
@@ -256,3 +273,44 @@ if __name__ == "__main__":
         cpg_upper: NDArray = np.quantile(cpg_burn_in, upper_bound, axis=0)
         for i, (low, up) in enumerate(zip(cpg_lower, cpg_upper)):
             print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    if plot_results:
+        plot_trace(
+            param_idx=0,
+            n_iter=n_iter,
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            mple_estimates=cph_mple,
+            savefig_root=savefig_root,
+            file_name=Path("num_trace_plot_beta1.png"),
+        )
+        plot_correlogram(
+            param_idx=0,
+            n_iter=n_iter,
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            savefig_root=savefig_root,
+            file_name=Path("num_correlogram_beta1.png"),
+        )
+        if calc_intervals:
+            plot_forestplot(
+                samples=[gs4_samples, mh_samples, hmc_samples, nuts_samples, mala_samples, cpg_samples],
+                burn_in=burn_in,
+                mple_estimates=cph_mple,
+                mple_lower=cph_mple_lower,
+                mple_upper=cph_mple_upper,
+                savefig_root=savefig_root,
+                file_name=Path("num_forestplot_beta1.png"),
+            )
