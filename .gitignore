@@ -182,5 +182,4 @@ cython_debug/
 # result
 real_result/
 synthetic_result/
-memo*
 figures/
