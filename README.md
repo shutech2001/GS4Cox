@@ -5,7 +5,7 @@ Materials for "[**Efficient Gibbs Sampling in Cox Regression Models Using Compos
 ## What is this repo?
 
 This repository includes an implementation of GS4Cox, a Gibbs sampler for Cox regression, as described in our paper.
-It also contains the numerical experiments and actual data experiments presented in the paper
+It also contains the numerical experiments and actual data experiments presented in the paper.
 
 ### Requirements and Setup
 ```
@@ -82,7 +82,7 @@ poetry env info --path
       - general Bayesian framework
       - composite partial likelihood
       - P'olya-Gamma augmentation scheme
-      - open-faced sandwich
+      - affine posterior calibration
   - `CoxMHSampler`
     - Metropolis sampler for Cox regression in general Bayesian framework class
   - `CoxPGSampler`

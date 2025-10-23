@@ -124,7 +124,7 @@ class GS4Cox(CoxSampler):
     - generalized Bayesian framework
     - composite partial likelihood
     - P\'olya-Gamma augmentation
-    - PL-target open-faced sandwich (center+shape)
+    - PL-target affine posterior calibration (center+shape)
     """
 
     def __init__(self, covariates: NDArray, random_state: int = 2025) -> None:
