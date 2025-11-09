@@ -18,7 +18,7 @@ poetry install
 # activate virtual environment
 eval $(poetry env activate)
 
-# [Option] to activate the interpreter, select the following output as the interpreter.
+# [Option] to activate the interpreter, select the following output as the interpreter
 poetry env info --path
 ```
 
