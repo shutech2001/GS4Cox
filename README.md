@@ -2,7 +2,7 @@
 
 Materials for "[**Efficient Gibbs Sampling in Cox Regression Models Using Composite Partial Likelihood and P´olya-Gamma Augmentation**](https://arxiv.org/abs/2506.04675)".
 
-## What is this repo?
+## What is This Repository?
 
 This repository includes an implementation of GS4Cox, a Gibbs sampler for Cox regression, as described in our paper.
 It also contains the numerical experiments and actual data experiments presented in the paper.
@@ -22,7 +22,7 @@ eval $(poetry env activate)
 poetry env info --path
 ```
 
-### executing simulation
+### Executing Simulation
 - `python src/synthetic_data_experiment.py`
   - `--data-size` | `--N`
     - sample size (default: `300`).
