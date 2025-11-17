@@ -27,7 +27,7 @@ poetry env info --path
   - `--data-size` | `--N`
     - sample size (default: `300`).
   - `--beta-true` | `--T`
-    - true value of coefficents (default: `'1.0,-1.0,0.5,-0.5,0.3,-0.3,0.1,-0.1'`).
+    - true value of coefficients (default: `'1.0,-1.0,0.5,-0.5,0.3,-0.3,0.1,-0.1'`).
   - `--learning-rate` | `--L`
     - learning rate for general Bayesian framework (default: `1.0`).
   - `--iteration` | `--I`
