@@ -49,3 +49,43 @@ def compute_esr(chain: NDArray, runtime: float) -> NDArray:
     """
     ess: NDArray = compute_ess(chain)
     return ess / runtime
+
+
+def compute_iact(chain: NDArray) -> NDArray:
+    """Compute Integrated Autocorrelation Time (IACT) from sampling chain
+
+    Args:
+        chain (NDArray): sampling result
+
+    Returns:
+        NDArray: IACT (1 + 2{sum_of_autocorrelation}) = N / ESS
+    """
+    _chain: NDArray = np.atleast_2d(chain)
+    n: int
+    d: int
+    n, d = _chain.shape
+    # store sum of autocorrelation by parameter
+    sum_of_acf: NDArray = np.empty(d)
+    for i in range(d):
+        sum_of_acf[i] = compute_sum_acf(_chain[:, i])
+    return 1 + 2 * sum_of_acf
+
+
+def compute_mcse(chain: NDArray) -> NDArray:
+    """Compute Monte Carlo Standard Error (MCSE) from sampling chain
+
+    Args:
+        chain (NDArray): sampling result
+
+    Returns:
+        NDArray: MCSE (standard_deviation * sqrt(IACT / N))
+    """
+    _chain: NDArray = np.atleast_2d(chain)
+    n: int
+    n, _ = _chain.shape
+    # compute standard deviation for each parameter
+    std: NDArray = np.std(_chain, axis=0, ddof=1)
+    # compute IACT for each parameter
+    iact: NDArray = compute_iact(_chain)
+    # MCSE = std * sqrt(IACT / N)
+    return std * np.sqrt(iact / n)

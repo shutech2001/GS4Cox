@@ -10,13 +10,12 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd  # type: ignore
 
-from cox_sampler import GS4Cox, CoxMHSampler
+from cox_sampler import CoxSampler, GS4Cox, CoxMHSampler, CoxHMCSampler, CoxNUTSampler, CoxMALASampler, CoxPGSampler
 from data import SyntheticDataGenerator4CoxReg
-from utils.evaluation_metrics import compute_esr, compute_ess
-from utils.pl_score_hessian import cox_score_and_hess
-from utils.plot_figure import PlotSyntheticResult
+from utils.evaluation_metrics import compute_esr, compute_ess, compute_mcse
+from utils.plot import plot_trace, plot_correlogram, plot_forestplot
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 # global setting for output
 np.set_printoptions(precision=2, suppress=True)
 
@@ -29,7 +28,9 @@ def run_simulation(
     burn_in: int,
     use_ties: bool,
     rounding: float,
-    ablation_correction: bool = False,
+    calc_intervals: bool,
+    plot_results: bool,
+    savefig_root: Path,
 ) -> None:
     data_generator = SyntheticDataGenerator4CoxReg(n=n, beta_true=beta_true)
 
@@ -38,68 +39,171 @@ def run_simulation(
     else:
         covariates, time, event = data_generator.simulate_cox_data()
 
-    # Estimate by GS4Cox
-    if ablation_correction:
-        gs4c = GS4Cox(covariates=covariates)
-        start = t.time()
-        gs4c_samples: NDArray = gs4c.gs4cox_without_finite_correction(time, event, n_iter=n_iter, lr=learning_rate)
-        end = t.time()
-        gs4c_burn_in: NDArray = gs4c_samples[burn_in:]
-        print(f'Estimated coefficients by GS4Cox (without finite correction): {gs4c_burn_in.mean(axis=0)}')
-        print(f'executing time: {end - start:.2f}')
-        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
-        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
+    # calculate lower and upper bounds of confidence interval
+    alpha: float = 0.05
+    lower_bound: float = alpha / 2
+    upper_bound: float = 1 - alpha / 2
 
-        # Estimate by GS4Cox without correction
-        score, hess = cox_score_and_hess(gs4c_burn_in.mean(axis=0), covariates, time, event)
-        gs4c_samples_corrected = gs4c_samples + np.linalg.solve(hess, score)
-        gs4c_burn_in_corrected: NDArray = gs4c_samples_corrected[burn_in:]
-        print(f'Estimated coefficients by GS4Cox (with finite correction): {gs4c_burn_in_corrected.mean(axis=0)}')
-
-    else:
-        gs4c = GS4Cox(covariates=covariates)
-        start = t.time()
-        gs4c_samples = gs4c.gs4cox_with_finite_correction(time, event, n_iter=n_iter, burn_in=burn_in, lr=learning_rate)
-        end = t.time()
-        gs4c_burn_in = gs4c_samples[burn_in:]
-        print(f'Estimated coefficients by GS4Cox: {gs4c_burn_in.mean(axis=0)}')
-        print(f'executing time: {end - start:.2f}')
-        print(f'Compute ess: {compute_ess(gs4c_samples).mean(axis=0):.2f}')
-        print(f'Compute esr: {compute_esr(gs4c_samples, runtime=end-start).mean(axis=0):.2f}')
-
-    # Estimate by Cox MH sampler
-    cmh = CoxMHSampler(covariates=covariates)
-    start = t.time()
-    cmh_h_samples = cmh.cox_mh_with_hessian_sample(time, event, n_iter=n_iter, lr=learning_rate)
-    end = t.time()
-    cmh_h_burn_in: NDArray = cmh_h_samples[burn_in:]
-    print(f'Estimated coefficients by MH optimal: {cmh_h_burn_in.mean(axis=0)}')
-    print(f'executing time: {end - start:.2f}')
-    print(f'Computed ess: {compute_ess(cmh_h_burn_in).mean(axis=0):.2f}')
-    print(f'Computed esr: {compute_esr(cmh_h_burn_in, runtime=end-start).mean(axis=0):.2f}')
-
-    # Estimate by naive Cox Regression
-    df = pd.DataFrame(covariates, columns=[f'X{i+1}' for i in range(len(beta_true))])
-    df['time'] = time
-    df['event'] = event
+    # Maximum partial likelihood estimates
+    df = pd.DataFrame(covariates, columns=[f"X{i+1}" for i in range(len(beta_true))])
+    df["time"] = time
+    df["event"] = event
     cph = CoxPHFitter()
-    cph.fit(df, duration_col='time', event_col='event')
+    cph.fit(df, duration_col="time", event_col="event")
     cph_mple: NDArray = np.array(cph.params_)
     print("Maximum partial likelihood estimates:", cph_mple)
+    if calc_intervals:
+        cph_mple_lower: NDArray = np.array(cph.confidence_intervals_["95% lower-bound"])
+        cph_mple_upper: NDArray = np.array(cph.confidence_intervals_["95% upper-bound"])
+        for i, (low, up) in enumerate(zip(cph_mple_lower, cph_mple_upper)):
+            print(f"95% confidence interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
 
-    # plot some figures
-    if ablation_correction:
-        psr = PlotSyntheticResult(
+    # set global seeds
+    CoxSampler.set_global_seeds()
+    # GS4Cox
+    gs4 = GS4Cox(covariates=covariates)
+    start = t.time()
+    gs4_samples: NDArray = gs4.sample(time, event, n_iter=n_iter, lr=learning_rate)
+    end = t.time()
+    gs4_burn_in: NDArray = gs4_samples[burn_in:]
+    print(f"Estimated coefficients by GS4Cox: {gs4_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(gs4_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(gs4_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(gs4_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        gs4_lower: NDArray = np.quantile(gs4_burn_in, lower_bound, axis=0)
+        gs4_upper: NDArray = np.quantile(gs4_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(gs4_lower, gs4_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    # Metropolis-Hastings algorithm
+    mh = CoxMHSampler(covariates=covariates)
+    start = t.time()
+    mh_samples = mh.sample(time, event, n_iter=n_iter, lr=learning_rate)
+    end = t.time()
+    mh_burn_in: NDArray = mh_samples[burn_in:]
+    print(f"\nEstimated coefficients by Cox-MH: {mh_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(mh_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(mh_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(mh_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        mh_lower: NDArray = np.quantile(mh_burn_in, lower_bound, axis=0)
+        mh_upper: NDArray = np.quantile(mh_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(mh_lower, mh_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    # Hamiltonian Monte Carlo
+    hmc = CoxHMCSampler(covariates=covariates)
+    start = t.time()
+    hmc_samples = hmc.sample(time, event, n_iter=n_iter, lr=learning_rate)
+    end = t.time()
+    hmc_burn_in: NDArray = hmc_samples[burn_in:]
+    print(f"\nEstimated coefficients by Cox-HMC: {hmc_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(hmc_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(hmc_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(hmc_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        hmc_lower: NDArray = np.quantile(hmc_burn_in, lower_bound, axis=0)
+        hmc_upper: NDArray = np.quantile(hmc_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(hmc_lower, hmc_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    # No-U-Turn Sampler
+    nuts = CoxNUTSampler(covariates=covariates)
+    start = t.time()
+    nuts_samples = nuts.sample(time, event, n_iter=n_iter, lr=learning_rate)
+    end = t.time()
+    print(f"{end - start}")
+    nuts_burn_in: NDArray = nuts_samples[burn_in:]
+    print(f"\nEstimated coefficients by Cox-NUTS: {nuts_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(nuts_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(nuts_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(nuts_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        nuts_lower: NDArray = np.quantile(nuts_burn_in, lower_bound, axis=0)
+        nuts_upper: NDArray = np.quantile(nuts_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(nuts_lower, nuts_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    # Metropolis-Adjusted Langevin Algorithm
+    mala = CoxMALASampler(covariates=covariates)
+    start = t.time()
+    mala_samples = mala.sample(time, event, n_iter=n_iter, lr=learning_rate)
+    end = t.time()
+    mala_burn_in: NDArray = mala_samples[burn_in:]
+    print(f"\nEstimated coefficients by Cox-MALA: {mala_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(mala_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(mala_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(mala_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        mala_lower: NDArray = np.quantile(mala_burn_in, lower_bound, axis=0)
+        mala_upper: NDArray = np.quantile(mala_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(mala_lower, mala_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    # Cox-P\'olya-Gamma algorithm proposed by Ren et al. (2025)
+    cpg = CoxPGSampler(covariates=covariates, random_state=42)
+    start = t.time()
+    cpg_samples = cpg.sample(time=time, event=event, n_iter=n_iter, calibration=True)
+    end = t.time()
+    cpg_burn_in = cpg_samples[burn_in:]
+    print(f"\nEstimated coefficients by Cox-PG: {cpg_burn_in.mean(axis=0)}")
+    print(f"{end - start}")
+    print(f"compute ess : {compute_ess(cpg_burn_in).mean(axis=0):.2f}")
+    print(f"compute esr : {compute_esr(cpg_burn_in, runtime=end-start).mean(axis=0):.2f}")
+    print(f"compute mcse: {compute_mcse(cpg_burn_in).mean(axis=0):.4f}")
+    if calc_intervals:
+        cpg_lower: NDArray = np.quantile(cpg_burn_in, lower_bound, axis=0)
+        cpg_upper: NDArray = np.quantile(cpg_burn_in, upper_bound, axis=0)
+        for i, (low, up) in enumerate(zip(cpg_lower, cpg_upper)):
+            print(f"95% credible interval of estimated coefficient {i}: {low:.2f} - {up:.2f}")
+
+    if plot_results:
+        plot_trace(
+            param_idx=0,
             n_iter=n_iter,
-            mh_samples=cmh_h_samples,
-            gs4c_samples=gs4c_samples,
-            gs4c_samples_corrected=gs4c_samples_corrected,
-            cph_mpl_estimates=cph_mple,
-            savefig_root=Path('../fig'),
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            true_values=beta_true,
+            mple_estimates=cph_mple,
+            savefig_root=savefig_root,
+            file_name=Path("num_trace_plot_beta1.png"),
         )
-        psr.pict_trace_plot(beta_true=beta_true)
-        psr.pict_post_dist(beta_true=beta_true, burn_in=burn_in)
-        psr.pict_correlogram(beta_true=beta_true)
+        plot_correlogram(
+            param_idx=0,
+            n_iter=n_iter,
+            methods=[
+                ("GS4Cox", gs4_samples),
+                ("MH", mh_samples),
+                ("HMC", hmc_samples),
+                ("NUTS", nuts_samples),
+                ("MALA", mala_samples),
+                ("Cox-PG", cpg_samples),
+            ],
+            savefig_root=savefig_root,
+            file_name=Path("num_correlogram_beta1.png"),
+        )
+        if calc_intervals:
+            plot_forestplot(
+                samples=[gs4_samples, mh_samples, hmc_samples, nuts_samples, mala_samples, cpg_samples],
+                burn_in=burn_in,
+                mple_estimates=cph_mple,
+                mple_lower=cph_mple_lower,
+                mple_upper=cph_mple_upper,
+                savefig_root=savefig_root,
+                file_name=Path("num_forestplot_beta1.png"),
+            )
 
 
 def parse_beta(beta_str: str) -> NDArray:
@@ -112,63 +216,65 @@ def parse_beta(beta_str: str) -> NDArray:
         NDArray: true coefficient vector
     """
     try:
-        beta_list: list[float] = [float(b.strip()) for b in beta_str.split(',')]
+        beta_list: list[float] = [float(b.strip()) for b in beta_str.split(",")]
     except ValueError as e:
-        raise argparse.ArgumentTypeError('beta_true must be a comma-separated list of numbers. (e.g., 5.0,3.5)') from e
+        raise argparse.ArgumentTypeError("beta_true must be a comma-separated list of numbers. (e.g., 5.0,3.5)") from e
     return np.array(beta_list)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Cox Regression Simulation with GS4Cox, optimal MH and Standard Cox Regression'
+        description="Cox Regression Simulation with GS4Cox, optimal MH and Standard Cox Regression"
     )
+    parser.add_argument("--data-size", "--N", type=int, default=300, help="sample size (default: 300).")
     parser.add_argument(
-        '--data-size', '--N',
-        type=int,
-        default=300,
-        help='sample size (default: 300).'
-    )
-    parser.add_argument(
-        '--beta-true', '--T',
+        "--beta-true",
+        "--T",
         type=parse_beta,
-        default='1.0,0.5,-1.5,3.0',
-        help="true value of coefficients (default: 1.0,0.5,-1.5,3.0)."
+        default="1.0,-1.0,0.5,-0.5,0.3,-0.3,0.1,-0.1",
+        help="true value of coefficients (default: 1.0,-1.0,0.5,-0.5,0.3,-0.3,0.1,-0.1).",
     )
     parser.add_argument(
-        '--learning-rate', '--L',
+        "--learning-rate",
+        "--L",
         type=float,
-        default='1.0',
-        help="learning rate for general Bayesian framework (default: 1.0)."
+        default="1.0",
+        help="learning rate for general Bayesian framework (default: 1.0).",
     )
     parser.add_argument(
-        '--iteration', '--I',
-        type=int,
-        default=1000,
-        help='the number of total iterations (default: 1000).'
+        "--iteration", "--I", type=int, default=1000, help="the number of total iterations (default: 1000)."
     )
+    parser.add_argument("--burn-in", "--B", type=int, default=500, help="the number of burn-in (default: 500).")
     parser.add_argument(
-        '--burn-in', '--B',
-        type=int,
-        default=500,
-        help='the number of burn-in (default: 500).'
-    )
-    parser.add_argument(
-        '--use-ties', '--U',
+        "--use-ties",
+        "--U",
         type=bool,
         default=False,
-        help='set to `True` when performing simulation based on the same event occurrence data (default: False).'
+        help="set to `True` when performing simulation based on the same event occurrence data (default: False).",
     )
     parser.add_argument(
-        '--rounding', '--R',
-        type=float,
-        default=0.001,
-        help='rounding unit for generating tie data (default: 0.001).'
+        "--rounding", "--R", type=float, default=0.001, help="rounding unit for generating tie data (default: 0.001)."
     )
     parser.add_argument(
-        '--ablation-correction', '--A',
+        "--calc-intervals",
+        "--CI",
+        type=bool,
+        default=True,
+        help="set to `True` when calculating 95% confidence/credible intervals of estimated coefficients (default: True).",  # noqa: E501
+    )
+    parser.add_argument(
+        "--plot-results",
+        "--P",
         type=bool,
         default=False,
-        help='set to `True` when comparing results with and without finite-sample corrections (default: False).'
+        help="set to `True` when plotting trace plots, correlograms and forest plots (default: False).",
+    )
+    parser.add_argument(
+        "--savefig-root",
+        "--S",
+        type=str,
+        default="figures",
+        help="root directory for saving figures (default: 'figures').",
     )
     args = parser.parse_args()
 
@@ -180,5 +286,7 @@ if __name__ == '__main__':
         burn_in=args.burn_in,
         use_ties=args.use_ties,
         rounding=args.rounding,
-        ablation_correction=args.ablation_correction
+        calc_intervals=args.calc_intervals,
+        plot_results=args.plot_results,
+        savefig_root=Path(args.savefig_root),
     )
