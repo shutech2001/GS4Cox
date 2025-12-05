@@ -117,4 +117,4 @@ poetry env info --path
 
 ## Contact
 
-If you have any question, please feel free to contact: stamano@niid.go.jp
+If you have any question, please feel free to contact: tamano.s@jihs.go.jp
